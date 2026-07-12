@@ -163,8 +163,10 @@ This README is the plugin's entry point; the full documentation lives in [`docs/
 - [`docs/contract.md`](docs/contract.md) — stable contract and governance for the plugin's nodes, storage, and editor interaction.
 - [`docs/plugin_split_plan.md`](docs/plugin_split_plan.md) — staged plan for the shipped `plugin.gd` split into per-tool editor controllers under `editor/` (delete after editor validation).
 
-The focused smoke scene is
-[`tests/test_low_poly_building_editor_3d.tscn`](tests/test_low_poly_building_editor_3d.tscn), the focused
+The end-to-end building smoke scene lives in the consuming project rather than
+this addon, because it probes generated buildings against the host project's
+player actor (in Kulangsu: `scenes/tests/test_low_poly_building_editor_3d.tscn`);
+this keeps the addon free of parent-repo resource paths. The focused
 street smoke scene is [`tests/test_street_3d.tscn`](tests/test_street_3d.tscn), the focused
 dome smoke scene is [`tests/test_dome_roof_3d.tscn`](tests/test_dome_roof_3d.tscn), the
 hip shape smoke scene is

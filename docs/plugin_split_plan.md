@@ -160,7 +160,8 @@ for:
 ## Stages
 
 Each stage is one reviewable patch. Gate every stage on:
-`tests/test_low_poly_building_editor_3d.tscn` exits 0, plus a manual editor
+the host project's building smoke scene (in Kulangsu:
+`scenes/tests/test_low_poly_building_editor_3d.tscn`) exits 0, plus a manual editor
 pass over each tool the stage touched (draw, preview, commit, drag-edit,
 undo, redo, Escape-cancel).
 
@@ -228,7 +229,8 @@ undo, redo, Escape-cancel).
 ## Acceptance
 
 - [x] `plugin.gd` under 1,000 lines; each controller under 2,000.
-- [ ] `tests/test_low_poly_building_editor_3d.tscn`,
+- [ ] The host project's building smoke scene (in Kulangsu:
+  `scenes/tests/test_low_poly_building_editor_3d.tscn`),
   `tests/test_dome_roof_3d.tscn`, and the variants gallery all pass
   (pending — no Godot run since the split).
 - [ ] Manual checklist green for all nine tools (draw, preview, commit,
