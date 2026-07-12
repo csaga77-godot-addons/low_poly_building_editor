@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "generator_version": 1,
+  "name": "SeededVilla",
+  "seed": 18432,
+  "grid_step": 0.5,
+  "footprint_cells": [16, 12],
+  "storeys": 1,
+  "variation": {
+	"footprint_jitter_cells": [2, 2]
+  },
+  "wall": {
+	"height": 2.8,
+	"thickness": 0.22,
+	"color": "#d9c69fff"
+  },
+  "floor": {
+	"thickness": 0.15,
+	"color": "#806c58ff"
+  },
+  "facade": {
+	"door_style": "glazed_door",
+	"entrance_segment": -1,
+	"door_width": 0.9,
+	"door_height": 2.1,
+	"door_color": "#794b33ff",
+	"window_style": "random",
+	"window_count_per_wall": 2,
+	"window_width": 1.0,
+	"window_height": 1.0,
+	"window_sill_height": 0.9,
+	"window_pane_color": "#94d1f285",
+	"frame_color": "#e7ecefff",
+	"porch_pillars": true,
+	"pillar_style": "square",
+	"pillar_radius": 0.18
+  },
+  "roof": {
+	"style": "random",
+	"angle_degrees": 38.0,
+	"thickness": 0.14,
+	"overhang": 0.35,
+	"color": "#794b3bff"
+  }
+}

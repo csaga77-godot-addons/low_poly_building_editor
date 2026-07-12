@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://cn633f030teg8"]
+
+[ext_resource type="Script" uid="uid://dkxjjw5k8da4q" path="res://addons/low_poly_building_editor/tests/test_street_3d.gd" id="1_test"]
+[ext_resource type="Script" uid="uid://qwhdc70m32yo" path="res://addons/low_poly_building_editor/building_3d.gd" id="2_0enk5"]
+
+[node name="TestStreet3D" type="Node3D" unique_id=366838841]
+script = ExtResource("1_test")
+
+[node name="Building3D" type="Node3D" parent="." unique_id=429630924]
+script = ExtResource("2_0enk5")

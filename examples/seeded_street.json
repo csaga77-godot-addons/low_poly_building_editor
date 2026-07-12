@@ -1,0 +1,34 @@
+{
+  "type": "street",
+  "schema_version": 1,
+  "generator_version": 1,
+  "name": "SeededHillStreet",
+  "seed": 2401,
+  "grid_step": 0.25,
+  "path": [
+    [0.0, 0.0, 0.0],
+    [4.0, 2.0, 0.0],
+    [10.0, 2.5, 4.0]
+  ],
+  "road": {
+    "width": 3.2,
+    "thickness": 0.18,
+    "color": "#615e57ff"
+  },
+  "kerb": {
+    "width": 0.18,
+    "height": 0.14,
+    "color": "#aaa49aff"
+  },
+  "footpath": {
+    "width": 1.1,
+    "thickness": 0.16,
+    "color": "#b8aa91ff"
+  },
+  "stairs": {
+    "threshold_degrees": 25.0,
+    "target_riser_height": 0.16,
+    "max_riser_height": 0.18,
+    "min_tread_depth": 0.24
+  }
+}

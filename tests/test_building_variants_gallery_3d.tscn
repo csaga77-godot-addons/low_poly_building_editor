@@ -1,0 +1,98 @@
+[gd_scene format=3 uid="uid://bcqkphluygg3f"]
+
+[ext_resource type="Script" uid="uid://dir3ia5s640aa" path="res://addons/low_poly_building_editor/tests/test_building_variants_gallery_3d.gd" id="1_gallery"]
+
+[sub_resource type="Environment" id="Environment_gallery"]
+background_mode = 1
+background_color = Color(0.73, 0.8, 0.82, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.88, 0.92, 0.94, 1)
+ambient_light_energy = 0.72
+reflected_light_source = 2
+tonemap_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
+albedo_color = Color(0.39, 0.47, 0.43, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+material = SubResource("StandardMaterial3D_ground")
+size = Vector2(49, 34)
+
+[node name="TestBuildingVariantsGallery3D" type="Node3D" unique_id=1577805917]
+script = ExtResource("1_gallery")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1486675940]
+environment = SubResource("Environment_gallery")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=1532337501]
+transform = Transform3D(0.8480481, 0.3938068, -0.35458517, 0, 0.66913056, 0.74314487, 0.52991927, -0.63022256, 0.5674549, 0, 0, 0)
+light_color = Color(1, 0.91, 0.78, 1)
+light_energy = 1.15
+shadow_enabled = true
+
+[node name="Fill" type="DirectionalLight3D" parent="." unique_id=1498060137]
+transform = Transform3D(-0.81915206, -0.26927784, 0.50643796, 0, 0.88294756, 0.46947157, -0.57357645, 0.3845686, -0.72326833, 0, 0, 0)
+light_color = Color(0.68, 0.78, 0.95, 1)
+light_energy = 0.35
+
+[node name="Ground" type="MeshInstance3D" parent="." unique_id=1129074999]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.15, 0)
+mesh = SubResource("PlaneMesh_ground")
+
+[node name="Examples" type="Node3D" parent="." unique_id=1450938844]
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=381289215]
+projection = 1
+current = true
+size = 40.0
+
+[node name="Interface" type="CanvasLayer" parent="." unique_id=1730106216]
+
+[node name="MarginContainer" type="MarginContainer" parent="Interface" unique_id=1146033263]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 18.0
+offset_top = 14.0
+offset_right = -18.0
+offset_bottom = -14.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Layout" type="VBoxContainer" parent="Interface/MarginContainer" unique_id=630427479]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Title" type="Label" parent="Interface/MarginContainer/Layout" unique_id=1800927370]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.96, 0.98, 1, 1)
+theme_override_colors/font_shadow_color = Color(0.05, 0.08, 0.09, 0.9)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 28
+text = "Seeded Building Variant Gallery"
+
+[node name="Status" type="Label" parent="Interface/MarginContainer/Layout" unique_id=847481700]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.86, 0.92, 0.94, 1)
+theme_override_colors/font_shadow_color = Color(0.05, 0.08, 0.09, 0.9)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 18
+text = "Generating examples…"
+
+[node name="Spacer" type="Control" parent="Interface/MarginContainer/Layout" unique_id=284667327]
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="Help" type="Label" parent="Interface/MarginContainer/Layout" unique_id=828331904]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.94, 0.95, 1)
+theme_override_colors/font_shadow_color = Color(0.05, 0.08, 0.09, 0.9)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 16
+text = "N / P  Next or previous seed batch    ·    R  Reset examples    ·    Wheel  Zoom"
+horizontal_alignment = 1
