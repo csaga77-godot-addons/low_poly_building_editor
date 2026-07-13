@@ -44,17 +44,15 @@ func _compute_end_joins() -> Dictionary:
 		var profile := street.get_geometry_profile()
 		if profile.size() < 2:
 			continue
-		if !_terminal_uses_stairs(street, profile[0], profile[1]):
-			ends.append({
-				"street": street, "is_start": true,
-				"point": profile[0], "dir": _plan_dir(profile[0], profile[1]),
-			})
+		ends.append({
+			"street": street, "is_start": true,
+			"point": profile[0], "dir": _plan_dir(profile[0], profile[1]),
+		})
 		var last := profile.size() - 1
-		if !_terminal_uses_stairs(street, profile[last], profile[last - 1]):
-			ends.append({
-				"street": street, "is_start": false,
-				"point": profile[last], "dir": _plan_dir(profile[last], profile[last - 1]),
-			})
+		ends.append({
+			"street": street, "is_start": false,
+			"point": profile[last], "dir": _plan_dir(profile[last], profile[last - 1]),
+		})
 
 	var result: Dictionary = {}
 	var claimed := PackedByteArray()
@@ -154,10 +152,6 @@ func _line_intersection_xz(
 
 func _points_coincide(a: Vector3, b: Vector3) -> bool:
 	return _plan_length(a, b) <= JOIN_TOLERANCE and absf(a.y - b.y) <= VERTICAL_TOLERANCE
-
-
-func _terminal_uses_stairs(street: Street3D, terminal: Vector3, inward: Vector3) -> bool:
-	return _segment_uses_stairs(street, terminal, inward)
 
 
 func _plan_dir(from_point: Vector3, to_point: Vector3) -> Vector3:

@@ -37,6 +37,7 @@ func _run_checks() -> void:
 	_validate_terrain_profile_and_manual_override()
 	_validate_sibling_intersection_merging()
 	_validate_intersection_kerb_connection()
+	_validate_stair_junction_connection()
 	_validate_street_json_generation()
 	_validate_wireframe_and_native_transform()
 	for failure in m_failures:
@@ -278,6 +279,50 @@ func _validate_intersection_kerb_connection() -> void:
 			break
 	if !road_center_filled:
 		m_failures.append("Junction arm road did not fill the centre with a wedge to the junction point")
+	coordinator.queue_free()
+
+
+func _validate_stair_junction_connection() -> void:
+	# A steep branch still shares the same level junction point as its two flat
+	# through arms. Its first stair tread must not opt the entire arm out of the
+	# endpoint miter, otherwise all three kerb/footpath runs terminate separately.
+	var coordinator := Building3DScript.new() as Building3DScript
+	add_child(coordinator)
+	var arms: Array[Street3DScript] = []
+	for end_point: Vector3 in [
+		Vector3(6.0, 0.0, 0.0),
+		Vector3(-6.0, 0.0, 0.0),
+		Vector3(0.0, 2.0, 4.0),
+	]:
+		var arm := BuildingFactoryScript.create_street_node(
+			coordinator, PackedVector3Array([Vector3.ZERO, end_point])
+		) as Street3DScript
+		coordinator.add_child(arm)
+		arms.append(arm)
+	coordinator.refresh_street_intersection_cuts()
+	if int(arms[2].get_last_build_stats().get("stair_segment_count", 0)) != 1:
+		m_failures.append("Steep junction fixture did not generate its expected footpath stairs")
+	for arm: Street3DScript in arms:
+		if arm.get_end_joins().get("start", {}).is_empty():
+			m_failures.append("A stair-bearing T-junction left an arm disconnected")
+	var stair_join: Dictionary = arms[2].get_end_joins().get("start", {})
+	var stair_arrays: Array = arms[2].mesh.surface_get_arrays(0)
+	var stair_vertices: PackedVector3Array = stair_arrays[Mesh.ARRAY_VERTEX]
+	var stair_colors: PackedColorArray = stair_arrays[Mesh.ARRAY_COLOR]
+	for field: String in ["left_kerb", "right_kerb"]:
+		var target: Vector3 = stair_join.get(field, Vector3.INF)
+		var reached := false
+		for vertex_index in range(stair_vertices.size()):
+			if !_colors_near(stair_colors[vertex_index], arms[2].kerb_color):
+				continue
+			if (
+				absf(stair_vertices[vertex_index].x - target.x) <= 0.01
+				and absf(stair_vertices[vertex_index].z - target.z) <= 0.01
+			):
+				reached = true
+				break
+		if !reached:
+			m_failures.append("Stair-bearing junction mesh did not reach its shared %s" % field)
 	coordinator.queue_free()
 
 
