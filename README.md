@@ -177,3 +177,11 @@ interactive generator gallery is
 [`tests/test_building_variants_gallery_3d.tscn`](tests/test_building_variants_gallery_3d.tscn). The
 plugin-owned documentation in [`docs/`](docs) is the canonical reference for its
 architecture and contracts.
+
+## Known noise
+
+Headless runs of a consuming project may print `resource still in use at exit`
+naming `building_wireframe.gd`. Its static shader cache is annotated with
+`@static_unload`, but Godot 4.x releases script references after the exit-time
+leak check, so the warning persists as harmless shutdown-ordering noise rather
+than a runtime leak. Do not spend time chasing it here.
