@@ -1,3 +1,6 @@
+# Scripts with static variables are never freed unless annotated; without this
+# the script (and its cached shaders) leaks at exit ("resources still in use").
+@static_unload
 @tool
 class_name BuildingWireframe
 extends RefCounted
