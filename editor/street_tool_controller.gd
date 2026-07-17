@@ -4,6 +4,12 @@ extends "res://addons/low_poly_building_editor/editor/building_tool_controller.g
 const Building3DScript = preload("res://addons/low_poly_building_editor/building_3d.gd")
 const BuildingFactoryScript = preload("res://addons/low_poly_building_editor/building_factory.gd")
 const Street3DScript = preload("res://addons/low_poly_building_editor/streets/street_3d.gd")
+const StreetNetwork3DScript = preload(
+	"res://addons/low_poly_building_editor/streets/street_network_3d.gd"
+)
+const StreetSectionProfileScript = preload(
+	"res://addons/low_poly_building_editor/streets/street_section_profile.gd"
+)
 
 var m_street_settings := {
 	"grid_step": 0.5,
@@ -27,6 +33,10 @@ var m_street_settings := {
 var m_path_points := PackedVector3Array()
 var m_hover_point := Vector3.ZERO
 var m_preview: Street3DScript
+var m_drag_network: StreetNetwork3DScript
+var m_drag_junction_id := ""
+var m_drag_old_state: StreetNetworkData
+var m_drag_moved := false
 
 
 func apply_settings(settings: Dictionary) -> void:
@@ -37,6 +47,12 @@ func apply_settings(settings: Dictionary) -> void:
 
 
 func cancel_preview() -> void:
+	if m_drag_network != null and m_drag_old_state != null:
+		m_drag_network.restore_network_state(m_drag_old_state)
+	m_drag_network = null
+	m_drag_junction_id = ""
+	m_drag_old_state = null
+	m_drag_moved = false
 	_clear_preview()
 	m_path_points = PackedVector3Array()
 
@@ -56,14 +72,32 @@ func handle_input(camera: Camera3D, event: InputEvent) -> int:
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	if event is InputEventMouseMotion:
 		var coordinator := m_context.get_or_create_coordinator(false)
-		if coordinator != null and !m_path_points.is_empty():
-			m_hover_point = _local_from_mouse(coordinator, camera, (event as InputEventMouseMotion).position)
+		if coordinator != null:
+			var point := _local_from_mouse(
+				coordinator, camera, (event as InputEventMouseMotion).position
+			)
+			if m_drag_network != null and !m_drag_junction_id.is_empty():
+				var dragged_junction := m_drag_network.network_data.find_junction(
+					m_drag_junction_id
+				)
+				if dragged_junction != null:
+					point.y = dragged_junction.position.y
+				m_drag_moved = m_drag_network.move_junction(m_drag_junction_id, point) or m_drag_moved
+				m_context.set_status("Moving street junction %s." % m_drag_junction_id)
+				return m_context.handled()
+			if !m_path_points.is_empty():
+				m_hover_point = point
 			_update_preview()
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	if !(event is InputEventMouseButton):
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	var mouse_button := event as InputEventMouseButton
-	if mouse_button.button_index != MOUSE_BUTTON_LEFT or !mouse_button.pressed:
+	if mouse_button.button_index != MOUSE_BUTTON_LEFT:
+		return EditorPlugin.AFTER_GUI_INPUT_PASS
+	if !mouse_button.pressed and m_drag_network != null:
+		_finish_junction_drag()
+		return m_context.handled()
+	if !mouse_button.pressed:
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	var coordinator := m_context.get_or_create_coordinator(true)
 	if coordinator == null:
@@ -73,6 +107,18 @@ func handle_input(camera: Camera3D, event: InputEvent) -> int:
 		_commit_path()
 		return m_context.handled()
 	var point := _local_from_mouse(coordinator, camera, mouse_button.position)
+	if m_path_points.is_empty():
+		var network := _network_for_edit(coordinator)
+		if network != null and _begin_network_edit(network, point, mouse_button):
+			return m_context.handled()
+	if !m_path_points.is_empty():
+		var active_network := _network_for_edit(coordinator)
+		if active_network != null:
+			var snapped := active_network.find_nearest_junction(
+				point, float(m_street_settings.get("grid_step", 0.5)) * 0.75
+			)
+			if !snapped.is_empty():
+				point = snapped["position"]
 	if !m_path_points.is_empty() and point.distance_to(m_path_points[-1]) <= 0.001:
 		return m_context.handled()
 	m_path_points.append(point)
@@ -86,32 +132,50 @@ func handle_input(camera: Camera3D, event: InputEvent) -> int:
 
 
 func resample_selected_street() -> void:
-	var street := _selected_street()
-	if street == null:
-		m_context.set_status("Select a Street3D before resampling terrain.")
+	var source: Node = _selected_street_source()
+	if source == null:
+		m_context.set_status("Select a StreetNetwork3D or Street3D before resampling terrain.")
 		return
 	var provider := _find_terrain_provider()
 	if provider == null:
 		m_context.set_status("No terrain height provider was found in the edited scene.")
 		return
-	var old_state := street.capture_native_transform_state()
+	var old_state: Variant = (
+		source.capture_network_state()
+		if source is StreetNetwork3DScript
+		else source.capture_native_transform_state()
+	)
 	var errors: Array[String] = []
 	if _is_integrated_terrain_provider(provider):
 		provider.call("rebuild_from_source")
 		errors = _terrain_integration_errors(provider)
 	else:
-		errors = street.resample_terrain(provider)
+		errors = source.call("resample_terrain", provider)
 	if !errors.is_empty():
-		street.restore_native_transform_state(old_state)
+		_restore_street_source_state(source, old_state)
 		m_context.set_status(String(errors[0]))
 		return
-	var new_state := street.capture_native_transform_state()
+	var new_state: Variant = (
+		source.capture_network_state()
+		if source is StreetNetwork3DScript
+		else source.capture_native_transform_state()
+	)
 	var undo := m_context.undo_redo()
 	undo.create_action("Resample Street Terrain")
-	undo.add_do_method(street, "restore_native_transform_state", new_state)
-	undo.add_undo_method(street, "restore_native_transform_state", old_state)
+	if source is StreetNetwork3DScript:
+		undo.add_do_method(source, "restore_network_state", new_state)
+		undo.add_undo_method(source, "restore_network_state", old_state)
+	else:
+		undo.add_do_method(source, "restore_native_transform_state", new_state)
+		undo.add_undo_method(source, "restore_native_transform_state", old_state)
 	undo.commit_action()
-	m_context.set_status("Resampled %d street profile points; manual heights were preserved." % street.profile_points.size())
+	if source is StreetNetwork3DScript:
+		m_context.set_status("Resampled the selected street network terrain profiles.")
+	else:
+		m_context.set_status(
+			"Resampled %d street profile points; manual heights were preserved."
+			% source.profile_points.size()
+		)
 
 
 func _local_from_mouse(
@@ -179,16 +243,25 @@ func _commit_path() -> void:
 	var coordinator := m_context.get_or_create_coordinator(false)
 	if coordinator == null:
 		return
-	var street := BuildingFactoryScript.create_street_node(
-		coordinator, m_path_points, m_street_settings
-	)
+	var network := _network_for_edit(coordinator)
 	var scene_root := m_context.editor_interface().get_edited_scene_root()
 	var undo := m_context.undo_redo()
-	undo.create_action("Create Street")
-	undo.add_do_reference(street)
-	undo.add_do_method(m_context, "do_add_node", coordinator, street, scene_root, true)
-	undo.add_undo_method(m_context, "undo_remove_node", coordinator, street)
-	undo.commit_action()
+	if network == null:
+		network = BuildingFactoryScript.create_street_network_node(coordinator)
+		network.add_path(m_path_points, _section_profile(), &"editor", true)
+		undo.create_action("Create Street Network")
+		undo.add_do_reference(network)
+		undo.add_do_method(m_context, "do_add_node", coordinator, network, scene_root, true)
+		undo.add_undo_method(m_context, "undo_remove_node", coordinator, network)
+		undo.commit_action()
+	else:
+		var old_state := network.capture_network_state()
+		network.add_path(m_path_points, _section_profile(), &"editor", true)
+		var new_state := network.capture_network_state()
+		undo.create_action("Create Street Network Path")
+		undo.add_do_method(network, "restore_network_state", new_state)
+		undo.add_undo_method(network, "restore_network_state", old_state)
+		undo.commit_action()
 	var provider := _find_terrain_provider()
 	if provider != null:
 		var errors: Array[String] = []
@@ -196,16 +269,16 @@ func _commit_path() -> void:
 			provider.call("rebuild_from_source")
 			errors = _terrain_integration_errors(provider)
 		else:
-			var unsampled_state := street.capture_native_transform_state()
-			errors = street.resample_terrain(provider)
+			var unsampled_state := network.capture_network_state()
+			errors = network.resample_terrain(provider)
 			if !errors.is_empty():
-				street.restore_native_transform_state(unsampled_state)
+				network.restore_network_state(unsampled_state)
 		if !errors.is_empty():
 			m_context.set_status("Created street; terrain sampling failed: %s" % errors[0])
 		else:
-			m_context.set_status("Created terrain-profiled street with %d samples." % street.profile_points.size())
+			m_context.set_status("Created a terrain-profiled street-network segment.")
 	else:
-		m_context.set_status("Created street without terrain sampling; no height provider was found.")
+		m_context.set_status("Created a street-network segment without terrain sampling.")
 	_clear_preview()
 	m_path_points = PackedVector3Array()
 
@@ -216,14 +289,121 @@ func _clear_preview() -> void:
 	m_preview = null
 
 
-func _selected_street() -> Street3DScript:
+func _selected_street_source() -> Node:
 	var selection := m_context.editor_interface().get_selection()
 	if selection == null:
 		return null
 	for node in selection.get_selected_nodes():
+		if node is StreetNetwork3DScript:
+			return node
 		if node is Street3DScript:
-			return node as Street3DScript
+			var parent := node.get_parent()
+			if parent is StreetNetwork3DScript:
+				return parent
+			return node
 	return null
+
+
+func _network_for_edit(coordinator: Building3DScript) -> StreetNetwork3DScript:
+	var selected := _selected_street_source()
+	if selected is StreetNetwork3DScript and selected.get_parent() == coordinator:
+		return selected as StreetNetwork3DScript
+	for child in coordinator.get_children():
+		if child is StreetNetwork3DScript:
+			return child as StreetNetwork3DScript
+	return null
+
+
+func _section_profile() -> StreetSectionProfileScript:
+	var profile := StreetSectionProfileScript.new() as StreetSectionProfileScript
+	profile.road_width = float(m_street_settings.get("road_width", 3.2))
+	profile.road_thickness = float(m_street_settings.get("road_thickness", 0.18))
+	profile.road_color = Color(m_street_settings.get("road_color", Color(0.38, 0.37, 0.34, 1.0)))
+	profile.left_kerb_width = float(m_street_settings.get("kerb_width", 0.18))
+	profile.right_kerb_width = profile.left_kerb_width
+	profile.kerb_height = float(m_street_settings.get("kerb_height", 0.14))
+	profile.kerb_color = Color(m_street_settings.get("kerb_color", Color(0.66, 0.64, 0.59, 1.0)))
+	profile.left_footpath_width = float(m_street_settings.get("footpath_width", 1.1))
+	profile.right_footpath_width = profile.left_footpath_width
+	profile.footpath_thickness = float(m_street_settings.get("footpath_thickness", 0.16))
+	profile.footpath_color = Color(m_street_settings.get("footpath_color", Color(0.72, 0.67, 0.57, 1.0)))
+	profile.stair_threshold_degrees = float(m_street_settings.get("stair_threshold_degrees", 25.0))
+	profile.stair_exit_threshold_degrees = minf(profile.stair_threshold_degrees, 22.0)
+	profile.target_riser_height = float(m_street_settings.get("target_riser_height", 0.16))
+	profile.max_riser_height = float(m_street_settings.get("max_riser_height", 0.18))
+	profile.min_tread_depth = float(m_street_settings.get("min_tread_depth", 0.24))
+	profile.terrain_clearance = float(m_street_settings.get("terrain_clearance", 0.025))
+	return profile
+
+
+func _begin_network_edit(
+	network: StreetNetwork3DScript,
+	point: Vector3,
+	mouse_button: InputEventMouseButton
+) -> bool:
+	var pick_distance := float(m_street_settings.get("grid_step", 0.5)) * 0.75
+	var junction := network.find_nearest_junction(point, pick_distance)
+	if mouse_button.alt_pressed and !junction.is_empty():
+		var old_state := network.capture_network_state()
+		if !network.remove_junction(String(junction["junction_id"])):
+			return true
+		_commit_network_state_action(network, old_state, "Remove Street Junction")
+		m_context.set_status("Removed the junction and its connected segments.")
+		return true
+	if mouse_button.shift_pressed:
+		var segment := network.find_nearest_segment(point, pick_distance)
+		if segment.is_empty():
+			return false
+		var old_state := network.capture_network_state()
+		var junction_id := network.split_segment(
+			String(segment["segment_id"]), Vector3(segment["position"])
+		)
+		if junction_id.is_empty():
+			return true
+		_commit_network_state_action(network, old_state, "Split Street Segment")
+		m_context.set_status("Split the street segment at junction %s." % junction_id)
+		return true
+	if !junction.is_empty() and !mouse_button.ctrl_pressed and !mouse_button.meta_pressed:
+		m_drag_network = network
+		m_drag_junction_id = String(junction["junction_id"])
+		m_drag_old_state = network.capture_network_state()
+		m_drag_moved = false
+		return true
+	return false
+
+
+func _finish_junction_drag() -> void:
+	if m_drag_network == null:
+		return
+	if m_drag_moved and m_drag_old_state != null:
+		_commit_network_state_action(
+			m_drag_network, m_drag_old_state, "Move Street Junction"
+		)
+		m_context.set_status("Moved street junction %s." % m_drag_junction_id)
+	m_drag_network = null
+	m_drag_junction_id = ""
+	m_drag_old_state = null
+	m_drag_moved = false
+
+
+func _commit_network_state_action(
+	network: StreetNetwork3DScript,
+	old_state: StreetNetworkData,
+	action_name: String
+) -> void:
+	var new_state := network.capture_network_state()
+	var undo := m_context.undo_redo()
+	undo.create_action(action_name)
+	undo.add_do_method(network, "restore_network_state", new_state)
+	undo.add_undo_method(network, "restore_network_state", old_state)
+	undo.commit_action()
+
+
+func _restore_street_source_state(source: Node, state: Variant) -> void:
+	if source is StreetNetwork3DScript:
+		source.restore_network_state(state as StreetNetworkData)
+	else:
+		source.call("restore_native_transform_state", state)
 
 
 func _find_terrain_provider() -> Node3D:

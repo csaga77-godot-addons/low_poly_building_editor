@@ -6,6 +6,9 @@ const Wall3DScript = preload("res://addons/low_poly_building_editor/walls/wall_3
 const WallSegmentScript = preload("res://addons/low_poly_building_editor/walls/wall_segment.gd")
 const Floor3DScript = preload("res://addons/low_poly_building_editor/floors/floor_3d.gd")
 const Street3DScript = preload("res://addons/low_poly_building_editor/streets/street_3d.gd")
+const StreetNetwork3DScript = preload(
+	"res://addons/low_poly_building_editor/streets/street_network_3d.gd"
+)
 const Stairs3DScript = preload("res://addons/low_poly_building_editor/stairs/stairs_3d.gd")
 const Rail3DScript = preload("res://addons/low_poly_building_editor/rails/rail_3d.gd")
 const Pillar3DScript = preload("res://addons/low_poly_building_editor/pillars/pillar_3d.gd")
@@ -336,6 +339,17 @@ static func create_street_node(
 	street.generate_collision = bool(settings.get("generate_collision", true))
 	street.rebuild_street_mesh()
 	return street
+
+
+## Creates the canonical design-time street network used by new editor
+## placement. Legacy Street3D construction stays available for old scenes and
+## deterministic street specs.
+static func create_street_network_node(building: Node) -> StreetNetwork3DScript:
+	var network := StreetNetwork3DScript.new() as StreetNetwork3DScript
+	network.name = _unique_child_name(building, "StreetNetwork3D")
+	network.build_on_ready = true
+	network.generate_collision = true
+	return network
 
 
 ## Creates a configured stairs node from one optional `settings` dictionary,

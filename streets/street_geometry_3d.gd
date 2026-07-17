@@ -25,15 +25,19 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 		return result
 
 	var road_half_width := maxf(float(settings.get("road_width", 3.2)) * 0.5, 0.05)
-	var kerb_width := maxf(float(settings.get("kerb_width", 0.18)), 0.01)
-	var footpath_width := maxf(float(settings.get("footpath_width", 1.1)), 0.05)
+	var kerb_width := maxf(float(settings.get("kerb_width", 0.18)), 0.0)
+	var footpath_width := maxf(float(settings.get("footpath_width", 1.1)), 0.0)
+	var left_kerb_width := maxf(float(settings.get("left_kerb_width", kerb_width)), 0.0)
+	var right_kerb_width := maxf(float(settings.get("right_kerb_width", kerb_width)), 0.0)
+	var left_footpath_width := maxf(
+		float(settings.get("left_footpath_width", footpath_width)), 0.0
+	)
+	var right_footpath_width := maxf(
+		float(settings.get("right_footpath_width", footpath_width)), 0.0
+	)
 	var road_thickness := maxf(float(settings.get("road_thickness", 0.18)), 0.01)
 	var kerb_height := maxf(float(settings.get("kerb_height", 0.14)), 0.01)
 	var footpath_thickness := maxf(float(settings.get("footpath_thickness", 0.16)), 0.01)
-	var threshold := clampf(float(settings.get("stair_threshold_degrees", 25.0)), 0.0, 89.0)
-	var target_riser := maxf(float(settings.get("target_riser_height", 0.16)), 0.02)
-	var max_riser := maxf(float(settings.get("max_riser_height", 0.18)), target_riser)
-	var min_tread := maxf(float(settings.get("min_tread_depth", 0.24)), 0.05)
 	var road_color := Color(settings.get("road_color", Color(0.38, 0.37, 0.34, 1.0)))
 	var kerb_color := Color(settings.get("kerb_color", Color(0.66, 0.64, 0.59, 1.0)))
 	var footpath_color := Color(settings.get("footpath_color", Color(0.72, 0.67, 0.57, 1.0)))
@@ -45,10 +49,14 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 
 	var road_left := _build_offset_polyline(profile, road_half_width)
 	var road_right := _build_offset_polyline(profile, -road_half_width)
-	var kerb_left := _build_offset_polyline(profile, road_half_width + kerb_width)
-	var kerb_right := _build_offset_polyline(profile, -road_half_width - kerb_width)
-	var foot_left := _build_offset_polyline(profile, road_half_width + kerb_width + footpath_width)
-	var foot_right := _build_offset_polyline(profile, -road_half_width - kerb_width - footpath_width)
+	var kerb_left := _build_offset_polyline(profile, road_half_width + left_kerb_width)
+	var kerb_right := _build_offset_polyline(profile, -road_half_width - right_kerb_width)
+	var foot_left := _build_offset_polyline(
+		profile, road_half_width + left_kerb_width + left_footpath_width
+	)
+	var foot_right := _build_offset_polyline(
+		profile, -road_half_width - right_kerb_width - right_footpath_width
+	)
 
 	# Snap each participating terminal cross-section onto its canonical junction,
 	# then retreat its sides onto the shared corners so the road edge, kerb, and
@@ -62,7 +70,8 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	var end_junction := profile[last_index]
 	# Applied inline (not via a helper) so the writes land on these local packed
 	# arrays; passing packed arrays into a mutating helper is copy-on-write unsafe.
-	if !start_side.is_empty():
+	var external_junction_surfaces := bool(settings.get("external_junction_surfaces", false))
+	if !start_side.is_empty() and !external_junction_surfaces:
 		if start_side.has("junction"):
 			start_junction = start_side["junction"]
 			var start_delta := start_junction - profile[0]
@@ -84,7 +93,7 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 			foot_left[0] = _override_terminal(foot_left[0], start_side["left_foot"])
 		if start_side.has("right_foot"):
 			foot_right[0] = _override_terminal(foot_right[0], start_side["right_foot"])
-	if !end_side.is_empty() and last_index > 0:
+	if !end_side.is_empty() and last_index > 0 and !external_junction_surfaces:
 		if end_side.has("junction"):
 			end_junction = end_side["junction"]
 			var end_delta := end_junction - profile[last_index]
@@ -121,6 +130,17 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 			road_thickness, road_color, vertices, normals, colors, indices
 		)
 
+	var stair_run_by_start: Dictionary = {}
+	var stair_run_members: Dictionary = {}
+	for stair_run: Dictionary in plan_stair_runs(profile, settings):
+		if int(stair_run.get("step_count", 0)) <= 0:
+			continue
+		var start_index := int(stair_run["start_index"])
+		var end_index := int(stair_run["end_index"])
+		stair_run_by_start[start_index] = stair_run
+		for segment_index in range(start_index, end_index):
+			stair_run_members[segment_index] = start_index
+
 	for segment_index in range(profile.size() - 1):
 		var a := profile[segment_index]
 		var b := profile[segment_index + 1]
@@ -135,23 +155,24 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 			road_thickness, road_color, road_ranges, side_ranges,
 			vertices, normals, colors, indices
 		)
-		var rise := absf(b.y - a.y)
-		var slope_degrees := rad_to_deg(atan2(rise, run))
-		var step_count := 0
-		if slope_degrees > threshold + 0.0001:
-			step_count = _choose_step_count(rise, run, target_riser, max_riser, min_tread)
-		if step_count > 0:
+		if stair_run_members.has(segment_index):
+			var run_start := int(stair_run_members[segment_index])
+			if run_start != segment_index:
+				continue
+			var stair_run: Dictionary = stair_run_by_start[run_start]
+			var run_end := int(stair_run["end_index"])
+			var step_count := int(stair_run["step_count"])
 			result["stair_segment_count"] = int(result["stair_segment_count"]) + 1
 			result["step_count"] = int(result["step_count"]) + step_count
 			_append_stepped_side(
 				road_left[segment_index], kerb_left[segment_index], foot_left[segment_index],
-				road_left[segment_index + 1], kerb_left[segment_index + 1], foot_left[segment_index + 1],
+				road_left[run_end], kerb_left[run_end], foot_left[run_end],
 				step_count, kerb_height, footpath_thickness, kerb_color, footpath_color,
 				vertices, normals, colors, indices
 			)
 			_append_stepped_side(
 				road_right[segment_index], kerb_right[segment_index], foot_right[segment_index],
-				road_right[segment_index + 1], kerb_right[segment_index + 1], foot_right[segment_index + 1],
+				road_right[run_end], kerb_right[run_end], foot_right[run_end],
 				step_count, kerb_height, footpath_thickness, kerb_color, footpath_color,
 				vertices, normals, colors, indices
 			)
@@ -182,6 +203,81 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	result["normals"] = normals
 	result["colors"] = colors
 	result["indices"] = indices
+	return result
+
+
+## Groups adjacent steep samples into coherent stair runs. The entry/exit
+## thresholds provide hysteresis, while minimum run length/rise suppress tiny
+## terrain ripples. Runs stop at sharp plan bends so their tread interpolation
+## never cuts across a street corner.
+static func plan_stair_runs(
+	profile: PackedVector3Array, settings: Dictionary
+) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if profile.size() < 2:
+		return result
+	var enter_threshold := clampf(
+		float(settings.get("stair_threshold_degrees", 25.0)), 0.0, 89.0
+	)
+	var exit_threshold := clampf(
+		float(settings.get("stair_exit_threshold_degrees", enter_threshold - 3.0)),
+		0.0, enter_threshold
+	)
+	var minimum_run := maxf(float(settings.get("minimum_stair_run_length", 1.0)), 0.1)
+	var minimum_rise := maxf(float(settings.get("minimum_stair_run_rise", 0.16)), 0.01)
+	var target_riser := maxf(float(settings.get("target_riser_height", 0.16)), 0.02)
+	var max_riser := maxf(float(settings.get("max_riser_height", 0.18)), target_riser)
+	var min_tread := maxf(float(settings.get("min_tread_depth", 0.24)), 0.05)
+	var segment_index := 0
+	while segment_index < profile.size() - 1:
+		var first_a := profile[segment_index]
+		var first_b := profile[segment_index + 1]
+		var first_run := Vector2(first_b.x - first_a.x, first_b.z - first_a.z).length()
+		var first_rise := first_b.y - first_a.y
+		var first_slope := (
+			0.0 if first_run <= EPSILON else rad_to_deg(atan2(absf(first_rise), first_run))
+		)
+		if first_run <= EPSILON or first_slope <= enter_threshold + 0.0001:
+			segment_index += 1
+			continue
+		var rise_sign := signf(first_rise)
+		var first_direction := Vector2(
+			first_b.x - first_a.x, first_b.z - first_a.z
+		).normalized()
+		var end_index := segment_index
+		var accumulated_run := 0.0
+		while end_index < profile.size() - 1:
+			var a := profile[end_index]
+			var b := profile[end_index + 1]
+			var plan_delta := Vector2(b.x - a.x, b.z - a.z)
+			var local_run := plan_delta.length()
+			if local_run <= EPSILON or signf(b.y - a.y) != rise_sign:
+				break
+			var slope := rad_to_deg(atan2(absf(b.y - a.y), local_run))
+			if end_index > segment_index and slope <= exit_threshold + 0.0001:
+				break
+			var direction_dot := clampf(
+				first_direction.dot(plan_delta.normalized()), -1.0, 1.0
+			)
+			if rad_to_deg(acos(direction_dot)) > 20.0:
+				break
+			accumulated_run += local_run
+			end_index += 1
+		var accumulated_rise := absf(
+			profile[end_index].y - profile[segment_index].y
+		)
+		if accumulated_run >= minimum_run and accumulated_rise >= minimum_rise:
+			result.append({
+				"start_index": segment_index,
+				"end_index": end_index,
+				"run": accumulated_run,
+				"rise": accumulated_rise,
+				"step_count": _choose_step_count(
+					accumulated_rise, accumulated_run,
+					target_riser, max_riser, min_tread
+				),
+			})
+		segment_index = maxi(end_index, segment_index + 1)
 	return result
 
 

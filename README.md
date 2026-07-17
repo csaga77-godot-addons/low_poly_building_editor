@@ -114,24 +114,28 @@ godot --headless --path . \
   --output res://generated/buildings/seeded_street.tscn
 ```
 
-The Street viewport tool samples the first scene node exposing
-`get_world_surface_height(world_position)` when a path is committed or the author presses
-**Resample Selected Street**. Samples are baked as editable `StreetProfilePoint` resources;
-points marked **Manual Height** survive later resampling. `LowPolyTerrain3D` now discovers
-these streets during its generation pass: each street samples the untouched base grid, then
-terrain feathers a lowered bed beneath the published full cross-section corridor before
-building terrain mesh and collision. `Street3D` remains the authority for visible road,
-kerb, footpath, stair, mesh, and collision generation; terrain owns only its supporting bed.
-Coplanar sibling streets under the same `Building3D` automatically merge their visible
-crossings and T-junctions: road ownership is deterministic, while buried road edges and
-kerb/footpath runs are clipped at the intersecting road edges without changing either
-authored path. Shared endpoints miter even when an arm begins or ends with automatic
-footpath stairs, so sloped branches stay connected; vertically separated crossings and
-mid-span stair-profile crossings remain independent.
-When no authored street exists, the terrain's default `generate_streets_from_mask` pass also
-thins sampled blue STREET cells into branch-aware multipoint centerlines and creates transient
-Street3D assemblies beneath `LowPolyTerrain3D/GeneratedStreets`. Persistent manual height edits
-still belong on authored Street3D nodes; mask-generated assemblies are replaced on rebuild.
+New Street viewport commits author one `StreetNetwork3D` per `Building3D`. Its serialized
+`StreetNetworkData` stores stable junction IDs, segment endpoint references, straight/cubic/
+polyline curves, vertical policy, and reusable asymmetric `StreetSectionProfile` resources.
+Dragging a junction rebuilds only its incident segments; Shift-click splits a segment and
+Option/Alt-click removes a junction through Godot undo/redo. Same-level crossings split into
+one explicit junction, while vertically separated crossings remain topologically independent.
+
+`StreetCurveSampler` adaptively subdivides cubic curves by chord error and tangent angle.
+Follow-terrain segments use a smoothed sampled profile; graded segments interpolate between
+junction elevations; manual segments retain their authored profile. Steep adjacent samples
+are grouped with entry/exit hysteresis into one coherent footpath stair run, while short
+terrain ripples remain ramps. Segment children sweep road/kerb/footpath geometry and a
+dedicated `StreetJunction3D` owns each multi-road centre surface. Cross-sections may use
+different left/right kerb and footpath widths.
+
+`LowPolyTerrain3D` discovers either the network's multi-corridor contract or a legacy
+`Street3D` source, lowers/feathers its supporting bed, and includes junction polygons in
+terrain shaping. Mask generation thins blue STREET cells into branch-aware paths, converts
+them into one deterministic network beneath `GeneratedStreets`, samples the untouched base
+grid, and rebuilds visible segment/junction caches. Explicit rebuilds replace generated mask
+overrides. Existing `Street3D` scenes and version-1 street JSON remain supported; a network's
+`add_legacy_street(s)` migration methods preserve their authored positions and sections.
 
 ### Visual Variant Batches
 
@@ -168,8 +172,9 @@ This README is the plugin's entry point; the full documentation lives in [`docs/
 The end-to-end building smoke scene lives in the consuming project rather than
 this addon, because it probes generated buildings against the host project's
 player actor (in Kulangsu: `scenes/tests/test_low_poly_building_editor_3d.tscn`);
-this keeps the addon free of parent-repo resource paths. The focused
-street smoke scene is [`tests/test_street_3d.tscn`](tests/test_street_3d.tscn), the focused
+this keeps the addon free of parent-repo resource paths. The focused legacy
+street smoke scene is [`tests/test_street_3d.tscn`](tests/test_street_3d.tscn), the graph/geometry
+suite is [`tests/test_street_network_3d.tscn`](tests/test_street_network_3d.tscn), the focused
 dome smoke scene is [`tests/test_dome_roof_3d.tscn`](tests/test_dome_roof_3d.tscn), the
 hip shape smoke scene is
 [`tests/test_hip_shapes_3d.tscn`](tests/test_hip_shapes_3d.tscn), the native transform

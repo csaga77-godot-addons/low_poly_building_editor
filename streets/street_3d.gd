@@ -11,7 +11,8 @@ const StreetProfilePointScript := preload(
 
 const GENERATED_META := &"street_generated"
 const PREVIEW_META := &"building_editor_preview"
-const MESH_GEOMETRY_VERSION := 3
+const NETWORK_SEGMENT_META := &"street_network_segment"
+const MESH_GEOMETRY_VERSION := 5
 const EPSILON := 0.00001
 
 signal terrain_profile_resampled(sample_count: int)
@@ -95,6 +96,37 @@ signal source_geometry_changed
 		footpath_color = value
 		_request_rebuild(false)
 
+@export_group("Asymmetric Cross Section")
+## Legacy Street3D nodes keep their symmetric kerb_width/footpath_width values.
+## Network-generated segments opt in and publish independent left/right widths.
+@export var use_asymmetric_cross_section := false:
+	set(value):
+		if use_asymmetric_cross_section == value:
+			return
+		use_asymmetric_cross_section = value
+		_request_rebuild()
+		_notify_terrain_corridor_changed()
+@export_range(0.0, 2.0, 0.01, "or_greater") var left_kerb_width := 0.18:
+	set(value):
+		left_kerb_width = maxf(value, 0.0)
+		_request_rebuild()
+		_notify_terrain_corridor_changed()
+@export_range(0.0, 2.0, 0.01, "or_greater") var right_kerb_width := 0.18:
+	set(value):
+		right_kerb_width = maxf(value, 0.0)
+		_request_rebuild()
+		_notify_terrain_corridor_changed()
+@export_range(0.0, 10.0, 0.05, "or_greater") var left_footpath_width := 1.1:
+	set(value):
+		left_footpath_width = maxf(value, 0.0)
+		_request_rebuild()
+		_notify_terrain_corridor_changed()
+@export_range(0.0, 10.0, 0.05, "or_greater") var right_footpath_width := 1.1:
+	set(value):
+		right_footpath_width = maxf(value, 0.0)
+		_request_rebuild()
+		_notify_terrain_corridor_changed()
+
 @export_group("Automatic Footpath Stairs")
 @export_range(0.0, 89.0, 0.1) var stair_threshold_degrees := 25.0:
 	set(value):
@@ -102,6 +134,18 @@ signal source_geometry_changed
 		_request_rebuild()
 		if m_is_ready:
 			source_geometry_changed.emit()
+@export_range(0.0, 89.0, 0.1) var stair_exit_threshold_degrees := 22.0:
+	set(value):
+		stair_exit_threshold_degrees = clampf(value, 0.0, stair_threshold_degrees)
+		_request_rebuild()
+@export_range(0.1, 20.0, 0.1, "or_greater") var minimum_stair_run_length := 1.0:
+	set(value):
+		minimum_stair_run_length = maxf(value, 0.1)
+		_request_rebuild()
+@export_range(0.01, 10.0, 0.01, "or_greater") var minimum_stair_run_rise := 0.16:
+	set(value):
+		minimum_stair_run_rise = maxf(value, 0.01)
+		_request_rebuild()
 @export_range(0.02, 1.0, 0.01, "or_greater") var target_riser_height := 0.16:
 	set(value):
 		target_riser_height = maxf(value, 0.02)
@@ -133,6 +177,14 @@ signal source_geometry_changed
 		if generate_collision == value:
 			return
 		generate_collision = value
+		_request_rebuild()
+## StreetNetwork3D assigns the shared centre surface to StreetJunction3D. The
+## segment still consumes endpoint miter corners for its kerbs and footpaths.
+@export var external_junction_surfaces := false:
+	set(value):
+		if external_junction_surfaces == value:
+			return
+		external_junction_surfaces = value
 		_request_rebuild()
 
 var m_is_ready := false
@@ -246,7 +298,11 @@ func get_end_joins() -> Dictionary:
 ## Generic terrain-generation contract. LowPolyTerrain3D discovers sources by
 ## method presence, so the terrain module does not import this editor add-on.
 func is_terrain_street_source() -> bool:
-	return !has_meta(PREVIEW_META) and path_points.size() >= 2
+	return (
+		!has_meta(PREVIEW_META)
+		and !has_meta(NETWORK_SEGMENT_META)
+		and path_points.size() >= 2
+	)
 
 
 func get_world_terrain_corridor() -> Dictionary:
@@ -262,9 +318,7 @@ func get_world_terrain_corridor() -> Dictionary:
 	var horizontal_scale := maxf(absf(parent_scale.x), absf(parent_scale.z))
 	return {
 		"path": world_path,
-		"half_width": (
-			road_width * 0.5 + kerb_width + footpath_width
-		) * horizontal_scale,
+		"half_width": get_maximum_half_width() * horizontal_scale,
 		"bed_depth": maxf(road_thickness + terrain_clearance, 0.01) * absf(parent_scale.y),
 		"source": self,
 	}
@@ -283,17 +337,17 @@ func get_validation_errors() -> Array[String]:
 		if run <= EPSILON:
 			errors.append("Street profile segment %d has zero horizontal length." % index)
 			continue
-		var rise := absf(b.y - a.y)
-		var slope := rad_to_deg(atan2(rise, run))
-		if slope <= stair_threshold_degrees + 0.0001:
+	var stair_runs := StreetGeometry.plan_stair_runs(profile, _geometry_settings())
+	for run: Dictionary in stair_runs:
+		if int(run.get("step_count", 0)) > 0:
 			continue
-		var minimum_steps := ceili(rise / max_riser_height)
-		var maximum_steps := floori(run / min_tread_depth)
-		if minimum_steps > maximum_steps or maximum_steps < 1:
-			errors.append(
-				"Street profile segment %d is too steep for max riser %.3f and min tread %.3f."
-				% [index, max_riser_height, min_tread_depth]
-			)
+		errors.append(
+			"Street profile stair run %d-%d is too steep for max riser %.3f and min tread %.3f."
+			% [
+				int(run.get("start_index", 0)), int(run.get("end_index", 0)),
+				max_riser_height, min_tread_depth,
+			]
+		)
 	return errors
 
 
@@ -405,18 +459,51 @@ func _geometry_settings() -> Dictionary:
 		"road_thickness": road_thickness,
 		"road_color": road_color,
 		"kerb_width": kerb_width,
+		"left_kerb_width": get_side_kerb_width(true),
+		"right_kerb_width": get_side_kerb_width(false),
 		"kerb_height": kerb_height,
 		"kerb_color": kerb_color,
 		"footpath_width": footpath_width,
+		"left_footpath_width": get_side_footpath_width(true),
+		"right_footpath_width": get_side_footpath_width(false),
 		"footpath_thickness": footpath_thickness,
 		"footpath_color": footpath_color,
 		"stair_threshold_degrees": stair_threshold_degrees,
+		"stair_exit_threshold_degrees": stair_exit_threshold_degrees,
+		"minimum_stair_run_length": minimum_stair_run_length,
+		"minimum_stair_run_rise": minimum_stair_run_rise,
 		"target_riser_height": target_riser_height,
 		"max_riser_height": max_riser_height,
 		"min_tread_depth": min_tread_depth,
 		"intersection_cuts": m_intersection_cuts,
 		"side_end_overrides": _local_side_end_overrides(),
+		"external_junction_surfaces": external_junction_surfaces,
 	}
+
+
+func get_side_kerb_width(left_side: bool) -> float:
+	if !use_asymmetric_cross_section:
+		return kerb_width
+	return left_kerb_width if left_side else right_kerb_width
+
+
+func get_side_footpath_width(left_side: bool) -> float:
+	if !use_asymmetric_cross_section:
+		return footpath_width
+	return left_footpath_width if left_side else right_footpath_width
+
+
+func get_ring_offset(left_side: bool, ring: int) -> float:
+	var offset := road_width * 0.5
+	if ring >= 1:
+		offset += get_side_kerb_width(left_side)
+	if ring >= 2:
+		offset += get_side_footpath_width(left_side)
+	return offset
+
+
+func get_maximum_half_width() -> float:
+	return maxf(get_ring_offset(true, 2), get_ring_offset(false, 2))
 
 
 ## Converts the parent-local miter joins into the node-local build frame (the
@@ -446,8 +533,13 @@ func _street_mesh_source_signature() -> int:
 		road_width, road_thickness, road_color,
 		kerb_width, kerb_height, kerb_color,
 		footpath_width, footpath_thickness, footpath_color,
-		stair_threshold_degrees, target_riser_height, max_riser_height, min_tread_depth,
-		m_intersection_cuts, m_end_joins,
+		use_asymmetric_cross_section,
+		left_kerb_width, right_kerb_width,
+		left_footpath_width, right_footpath_width,
+		stair_threshold_degrees, stair_exit_threshold_degrees,
+		minimum_stair_run_length, minimum_stair_run_rise,
+		target_riser_height, max_riser_height, min_tread_depth,
+		m_intersection_cuts, m_end_joins, external_junction_surfaces,
 	])
 
 

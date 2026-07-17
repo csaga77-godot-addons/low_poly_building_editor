@@ -19,6 +19,9 @@ const BuildingMeshScript = preload("res://addons/low_poly_building_editor/buildi
 const Wall3DScript = preload("res://addons/low_poly_building_editor/walls/wall_3d.gd")
 const Floor3DScript = preload("res://addons/low_poly_building_editor/floors/floor_3d.gd")
 const Street3DScript = preload("res://addons/low_poly_building_editor/streets/street_3d.gd")
+const StreetNetwork3DScript = preload(
+	"res://addons/low_poly_building_editor/streets/street_network_3d.gd"
+)
 const Stairs3DScript = preload("res://addons/low_poly_building_editor/stairs/stairs_3d.gd")
 const Rail3DScript = preload("res://addons/low_poly_building_editor/rails/rail_3d.gd")
 const Pillar3DScript = preload("res://addons/low_poly_building_editor/pillars/pillar_3d.gd")
@@ -111,6 +114,12 @@ func _enter_tree() -> void:
 		_get_editor_icon(&"MeshInstance3D")
 	)
 	add_custom_type(
+		"StreetNetwork3D",
+		"Node3D",
+		StreetNetwork3DScript,
+		_get_editor_icon(&"Node3D")
+	)
+	add_custom_type(
 		"Rail3D",
 		"MeshInstance3D",
 		Rail3DScript,
@@ -191,6 +200,7 @@ func _exit_tree() -> void:
 		remove_custom_type(String(m_building_style_custom_types[type_index]["name"]))
 	remove_custom_type("Rail3D")
 	remove_custom_type("Floor3D")
+	remove_custom_type("StreetNetwork3D")
 	remove_custom_type("Street3D")
 	remove_custom_type("Wall3D")
 	remove_custom_type("Building3D")
@@ -339,6 +349,8 @@ func _tool_mode_for_building_node(node: Node) -> String:
 	if node is Floor3DScript:
 		return MODE_FLOOR
 	if node is Street3DScript:
+		return MODE_STREET
+	if node is StreetNetwork3DScript:
 		return MODE_STREET
 	if node is Stairs3DScript:
 		return MODE_STAIRS

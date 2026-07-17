@@ -11,9 +11,11 @@ const JOIN_TOLERANCE := 0.05
 const MAX_END_MITER_SCALE := 3.0
 
 var m_streets: Array[Street3D] = []
+var m_resolve_midspan_crossings := true
 
 
-func _init(streets: Array) -> void:
+func _init(streets: Array, resolve_midspan_crossings := true) -> void:
+	m_resolve_midspan_crossings = resolve_midspan_crossings
 	for street: Variant in streets:
 		if street is Street3D:
 			m_streets.append(street)
@@ -28,17 +30,18 @@ func refresh_street_intersection_cuts() -> void:
 		var profile := street.get_geometry_profile()
 		profiles.append(profile)
 		profile_bounds.append(_profile_plan_bounds(profile))
-	for first_index in range(m_streets.size()):
-		var first := m_streets[first_index]
-		var first_profile := profiles[first_index]
-		for second_index in range(first_index + 1, m_streets.size()):
-			var second := m_streets[second_index]
-			if !profile_bounds[first_index].intersects(
-				profile_bounds[second_index], true
-			):
-				continue
-			var second_profile := profiles[second_index]
-			_append_pair_cuts(first, first_profile, second, second_profile, cuts_by_street)
+	if m_resolve_midspan_crossings:
+		for first_index in range(m_streets.size()):
+			var first := m_streets[first_index]
+			var first_profile := profiles[first_index]
+			for second_index in range(first_index + 1, m_streets.size()):
+				var second := m_streets[second_index]
+				if !profile_bounds[first_index].intersects(
+					profile_bounds[second_index], true
+				):
+					continue
+				var second_profile := profiles[second_index]
+				_append_pair_cuts(first, first_profile, second, second_profile, cuts_by_street)
 	var joins_by_street := _compute_end_joins(profiles)
 	for street: Street3D in m_streets:
 		street.set_intersection_geometry(
@@ -97,9 +100,15 @@ func _compute_end_joins(profiles: Array[PackedVector3Array]) -> Dictionary:
 			var next_arm := group[(arm_index + 1) % count]
 			if arm["dir"] == Vector3.ZERO or next_arm["dir"] == Vector3.ZERO:
 				continue
-			var corner_road := _miter_corner(arm, next_arm, _ring_offset(arm, 0), _ring_offset(next_arm, 0))
-			var corner_kerb := _miter_corner(arm, next_arm, _ring_offset(arm, 1), _ring_offset(next_arm, 1))
-			var corner_foot := _miter_corner(arm, next_arm, _ring_offset(arm, 2), _ring_offset(next_arm, 2))
+			var corner_road := _miter_corner(
+				arm, next_arm, _ring_offset(arm, 0, true), _ring_offset(next_arm, 0, false)
+			)
+			var corner_kerb := _miter_corner(
+				arm, next_arm, _ring_offset(arm, 1, true), _ring_offset(next_arm, 1, false)
+			)
+			var corner_foot := _miter_corner(
+				arm, next_arm, _ring_offset(arm, 2, true), _ring_offset(next_arm, 2, false)
+			)
 			if corner_road.is_empty() or corner_kerb.is_empty() or corner_foot.is_empty():
 				continue
 			# The corner sits on this arm's CCW boundary and the next arm's CW one.
@@ -139,14 +148,10 @@ func _assign_junction(result: Dictionary, arm: Dictionary, junction: Vector3) ->
 	result[street] = entry
 
 
-func _ring_offset(arm: Dictionary, ring: int) -> float:
+func _ring_offset(arm: Dictionary, ring: int, is_ccw_side: bool) -> float:
 	var street: Street3D = arm["street"]
-	var half_width := street.road_width * 0.5
-	if ring == 0:
-		return half_width
-	if ring == 1:
-		return half_width + street.kerb_width
-	return half_width + street.kerb_width + street.footpath_width
+	var side_is_left := is_ccw_side if bool(arm["is_start"]) else !is_ccw_side
+	return street.get_ring_offset(side_is_left, ring)
 
 
 ## Intersects arm's CCW boundary line with next_arm's CW boundary line for a
