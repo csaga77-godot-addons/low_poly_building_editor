@@ -29,12 +29,6 @@ const SIDE_WALL_COLLISION_META := &"stairs_side_wall_collision"
 const LEFT_SIDE_COLLISION_SHAPE_NAME := "LeftSideCollisionShape3D"
 const RIGHT_SIDE_COLLISION_SHAPE_NAME := "RightSideCollisionShape3D"
 
-@export var rebuild := false:
-	set(value):
-		if !value:
-			return
-		call_deferred("rebuild_stairs_mesh")
-
 @export var start_point := Vector3.ZERO:
 	set(value):
 		if start_point.is_equal_approx(value):

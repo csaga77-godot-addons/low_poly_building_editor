@@ -4,12 +4,6 @@ extends "res://addons/low_poly_building_editor/building_mesh_3d.gd"
 const GENERATED_META := &"pillar_generated"
 const PREVIEW_META := &"building_editor_preview"
 
-@export var rebuild := false:
-	set(value):
-		if !value:
-			return
-		call_deferred("rebuild_pillar_mesh")
-
 @export var base_point := Vector3.ZERO:
 	set(value):
 		if base_point.is_equal_approx(value):

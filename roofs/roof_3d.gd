@@ -6,12 +6,6 @@ signal source_geometry_changed
 const GENERATED_META := &"roof_generated"
 const PREVIEW_META := &"building_editor_preview"
 const RECT_EPSILON := 0.001
-@export var rebuild := false:
-	set(value):
-		if !value:
-			return
-		call_deferred("rebuild_roof_mesh")
-
 @export var start_point := Vector3.ZERO:
 	set(value):
 		if start_point.is_equal_approx(value):

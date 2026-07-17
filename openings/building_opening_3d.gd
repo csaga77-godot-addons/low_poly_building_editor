@@ -18,12 +18,6 @@ const FRAME_FACE_GAP := 0.035
 # (and protrudes) on both faces.
 enum FrameSides { FRONT, BOTH }
 
-@export var rebuild := false:
-	set(value):
-		if !value:
-			return
-		call_deferred("_rebuild")
-
 @export_range(0.1, 12.0, 0.01) var opening_width := 1.0:
 	set(value):
 		var clamped_value := maxf(value, 0.1)
@@ -318,7 +312,6 @@ func _restore_generated_parts_from_cache() -> void:
 func _opening_geometry_source_signature() -> int:
 	var payload := [String(get_script().resource_path)]
 	var excluded := {
-		&"rebuild": true,
 		&"build_on_ready": true,
 		&"generate_collision": true,
 		&"m_generated_part_cache_signature": true,

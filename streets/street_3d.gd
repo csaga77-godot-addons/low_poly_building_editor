@@ -18,11 +18,6 @@ signal terrain_profile_resampled(sample_count: int)
 signal terrain_corridor_changed()
 signal source_geometry_changed
 
-@export var rebuild := false:
-	set(value):
-		if value:
-			call_deferred("rebuild_street_mesh")
-
 ## Parent-local plan path. Y is used until a baked profile exists and remains
 ## the editable control-point height when terrain sampling is not requested.
 @export var path_points := PackedVector3Array([

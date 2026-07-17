@@ -24,12 +24,6 @@ var m_legacy_end_point := Vector3(4.0, 0.0, 0.0)
 var m_legacy_extra_segments: Array[WallSegment] = []
 var m_syncing_legacy_defaults := false
 
-@export var rebuild := false:
-	set(value):
-		if !value:
-			return
-		call_deferred("rebuild_wall_mesh")
-
 ## Canonical authored geometry. Segment zero supplies the node transform;
 ## an empty array is a valid wall with no generated mesh or collision.
 @export var segments: Array[WallSegment] = []:
