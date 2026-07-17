@@ -11,7 +11,7 @@ const StreetProfilePointScript := preload(
 
 const GENERATED_META := &"street_generated"
 const PREVIEW_META := &"building_editor_preview"
-const MESH_GEOMETRY_VERSION := 2
+const MESH_GEOMETRY_VERSION := 3
 const EPSILON := 0.00001
 
 signal terrain_profile_resampled(sample_count: int)
@@ -141,8 +141,9 @@ var m_preserve_profile_on_path_change := false
 var m_intersection_cuts: Array[Dictionary] = []
 # Miter targets that extend a terminal cross-section so a street's road edge,
 # kerb, and footpath reach the shared junction corners of its neighbours. Keyed
-# "start"/"end"; each side holds left_/right_ road/kerb/foot Vector3s in the
-# parent-local frame. Recomputed by the resolver, never serialized.
+# "start"/"end"; each side holds one canonical junction plus left_/right_
+# road/kerb/foot Vector3s in the parent-local frame. Recomputed by the resolver,
+# never serialized.
 var m_end_joins: Dictionary = {}
 
 
@@ -221,6 +222,7 @@ func _normalize_end_joins(end_joins: Dictionary) -> Dictionary:
 			continue
 		var entry: Dictionary = {}
 		for field: String in [
+			"junction",
 			"left_road", "left_kerb", "left_foot",
 			"right_road", "right_kerb", "right_foot",
 		]:

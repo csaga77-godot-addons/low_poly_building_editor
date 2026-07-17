@@ -50,55 +50,74 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	var foot_left := _build_offset_polyline(profile, road_half_width + kerb_width + footpath_width)
 	var foot_right := _build_offset_polyline(profile, -road_half_width - kerb_width - footpath_width)
 
-	# Retreat each terminal cross-section onto the shared junction corners so a
-	# street's road edge, kerb, and footpath meet its neighbours. The road band is
-	# pulled back to the junction boundary here (not left overlapping); the centre
-	# wedge below fills the gap between the boundary and the junction point so the
-	# arms tile the junction without overlap. Only the plan (XZ) position moves.
+	# Snap each participating terminal cross-section onto its canonical junction,
+	# then retreat its sides onto the shared corners so the road edge, kerb, and
+	# footpath meet their neighbours. The road band is pulled back to the junction
+	# boundary here; the centre wedge below fills the remaining gap.
 	var side_end_overrides: Dictionary = settings.get("side_end_overrides", {})
 	var start_side: Dictionary = side_end_overrides.get("start", {})
 	var end_side: Dictionary = side_end_overrides.get("end", {})
 	var last_index := profile.size() - 1
+	var start_junction := profile[0]
+	var end_junction := profile[last_index]
 	# Applied inline (not via a helper) so the writes land on these local packed
 	# arrays; passing packed arrays into a mutating helper is copy-on-write unsafe.
 	if !start_side.is_empty():
+		if start_side.has("junction"):
+			start_junction = start_side["junction"]
+			var start_delta := start_junction - profile[0]
+			road_left[0] += start_delta
+			road_right[0] += start_delta
+			kerb_left[0] += start_delta
+			kerb_right[0] += start_delta
+			foot_left[0] += start_delta
+			foot_right[0] += start_delta
 		if start_side.has("left_road"):
-			road_left[0] = _override_plan(road_left[0], start_side["left_road"])
+			road_left[0] = _override_terminal(road_left[0], start_side["left_road"])
 		if start_side.has("right_road"):
-			road_right[0] = _override_plan(road_right[0], start_side["right_road"])
+			road_right[0] = _override_terminal(road_right[0], start_side["right_road"])
 		if start_side.has("left_kerb"):
-			kerb_left[0] = _override_plan(kerb_left[0], start_side["left_kerb"])
+			kerb_left[0] = _override_terminal(kerb_left[0], start_side["left_kerb"])
 		if start_side.has("right_kerb"):
-			kerb_right[0] = _override_plan(kerb_right[0], start_side["right_kerb"])
+			kerb_right[0] = _override_terminal(kerb_right[0], start_side["right_kerb"])
 		if start_side.has("left_foot"):
-			foot_left[0] = _override_plan(foot_left[0], start_side["left_foot"])
+			foot_left[0] = _override_terminal(foot_left[0], start_side["left_foot"])
 		if start_side.has("right_foot"):
-			foot_right[0] = _override_plan(foot_right[0], start_side["right_foot"])
+			foot_right[0] = _override_terminal(foot_right[0], start_side["right_foot"])
 	if !end_side.is_empty() and last_index > 0:
+		if end_side.has("junction"):
+			end_junction = end_side["junction"]
+			var end_delta := end_junction - profile[last_index]
+			road_left[last_index] += end_delta
+			road_right[last_index] += end_delta
+			kerb_left[last_index] += end_delta
+			kerb_right[last_index] += end_delta
+			foot_left[last_index] += end_delta
+			foot_right[last_index] += end_delta
 		if end_side.has("left_road"):
-			road_left[last_index] = _override_plan(road_left[last_index], end_side["left_road"])
+			road_left[last_index] = _override_terminal(road_left[last_index], end_side["left_road"])
 		if end_side.has("right_road"):
-			road_right[last_index] = _override_plan(road_right[last_index], end_side["right_road"])
+			road_right[last_index] = _override_terminal(road_right[last_index], end_side["right_road"])
 		if end_side.has("left_kerb"):
-			kerb_left[last_index] = _override_plan(kerb_left[last_index], end_side["left_kerb"])
+			kerb_left[last_index] = _override_terminal(kerb_left[last_index], end_side["left_kerb"])
 		if end_side.has("right_kerb"):
-			kerb_right[last_index] = _override_plan(kerb_right[last_index], end_side["right_kerb"])
+			kerb_right[last_index] = _override_terminal(kerb_right[last_index], end_side["right_kerb"])
 		if end_side.has("left_foot"):
-			foot_left[last_index] = _override_plan(foot_left[last_index], end_side["left_foot"])
+			foot_left[last_index] = _override_terminal(foot_left[last_index], end_side["left_foot"])
 		if end_side.has("right_foot"):
-			foot_right[last_index] = _override_plan(foot_right[last_index], end_side["right_foot"])
+			foot_right[last_index] = _override_terminal(foot_right[last_index], end_side["right_foot"])
 
 	# Fill the junction centre: a triangle wedge from the junction point out to the
 	# two retreated road corners. Adjacent arms' wedges fan around the shared point
 	# and tile the intersection with no overlap or hole.
 	if !start_side.is_empty():
 		_append_road_wedge(
-			profile[0], road_left[0], road_right[0], road_thickness, road_color,
+			start_junction, road_left[0], road_right[0], road_thickness, road_color,
 			vertices, normals, colors, indices
 		)
 	if !end_side.is_empty() and last_index > 0:
 		_append_road_wedge(
-			profile[last_index], road_left[last_index], road_right[last_index],
+			end_junction, road_left[last_index], road_right[last_index],
 			road_thickness, road_color, vertices, normals, colors, indices
 		)
 
@@ -230,8 +249,8 @@ static func _append_upward_triangle(
 		_append_triangle(a, b, c, color, vertices, normals, colors, indices)
 
 
-static func _override_plan(original: Vector3, target: Vector3) -> Vector3:
-	return Vector3(target.x, original.y, target.z)
+static func _override_terminal(_original: Vector3, target: Vector3) -> Vector3:
+	return target
 
 
 static func _build_offset_polyline(profile: PackedVector3Array, offset: float) -> PackedVector3Array:

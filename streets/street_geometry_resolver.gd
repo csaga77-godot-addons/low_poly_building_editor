@@ -7,6 +7,8 @@ const MIN_CROSS_ANGLE_SINE := 0.05
 const VERTICAL_TOLERANCE := 0.02
 ## Endpoints closer than this in plan share a junction and get mitered together.
 const JOIN_TOLERANCE := 0.05
+## Keep endpoint joins within the same bounded-miter envelope as ordinary bends.
+const MAX_END_MITER_SCALE := 3.0
 
 var m_streets: Array[Street3D] = []
 
@@ -70,6 +72,12 @@ func _compute_end_joins() -> Dictionary:
 				claimed[j] = 1
 		if group.size() < 2:
 			continue
+		var junction := _canonical_junction(group)
+		for group_index in range(group.size()):
+			var group_arm := group[group_index]
+			group_arm["junction"] = junction
+			group[group_index] = group_arm
+			_assign_junction(result, group_arm, junction)
 		group.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 			return _heading(a["dir"]) < _heading(b["dir"])
 		)
@@ -90,6 +98,23 @@ func _compute_end_joins() -> Dictionary:
 	return result
 
 
+func _canonical_junction(group: Array[Dictionary]) -> Vector3:
+	var junction := Vector3.ZERO
+	for arm: Dictionary in group:
+		junction += arm["point"] as Vector3
+	return junction / float(group.size())
+
+
+func _assign_junction(result: Dictionary, arm: Dictionary, junction: Vector3) -> void:
+	var street: Street3D = arm["street"]
+	var key := "start" if bool(arm["is_start"]) else "end"
+	var entry: Dictionary = result.get(street, {})
+	var joins: Dictionary = entry.get(key, {})
+	joins["junction"] = junction
+	entry[key] = joins
+	result[street] = entry
+
+
 func _ring_offset(arm: Dictionary, ring: int) -> float:
 	var street: Street3D = arm["street"]
 	var half_width := street.road_width * 0.5
@@ -103,7 +128,7 @@ func _ring_offset(arm: Dictionary, ring: int) -> float:
 ## Intersects arm's CCW boundary line with next_arm's CW boundary line for a
 ## given ring offset. Returns {} when the boundaries are parallel.
 func _miter_corner(arm: Dictionary, next_arm: Dictionary, offset: float, next_offset: float) -> Dictionary:
-	var junction: Vector3 = arm["point"]
+	var junction: Vector3 = arm.get("junction", arm["point"])
 	var arm_dir: Vector3 = arm["dir"]
 	var next_dir: Vector3 = next_arm["dir"]
 	var arm_ccw_normal := Vector3(-arm_dir.z, 0.0, arm_dir.x)
@@ -113,7 +138,13 @@ func _miter_corner(arm: Dictionary, next_arm: Dictionary, offset: float, next_of
 	var hit := _line_intersection_xz(arm_point, arm_dir, next_point, next_dir)
 	if hit.is_empty():
 		return {}
-	return {"point": Vector3(float(hit["x"]), junction.y, float(hit["z"]))}
+	var corner := Vector3(float(hit["x"]), junction.y, float(hit["z"]))
+	var delta := Vector2(corner.x - junction.x, corner.z - junction.z)
+	var maximum_distance := maxf(offset, next_offset) * MAX_END_MITER_SCALE
+	if delta.length() > maximum_distance:
+		delta = delta.normalized() * maximum_distance
+		corner = Vector3(junction.x + delta.x, junction.y, junction.z + delta.y)
+	return {"point": corner}
 
 
 func _assign_corner(
@@ -189,8 +220,12 @@ func _append_pair_cuts(
 			var second_height := lerpf(second_a.y, second_b.y, second_t)
 			if absf(first_height - second_height) > VERTICAL_TOLERANCE:
 				continue
-			var first_through := first_t > EPSILON and first_t < 1.0 - EPSILON
-			var second_through := second_t > EPSILON and second_t < 1.0 - EPSILON
+			var first_through := _street_hit_is_through(
+				first_segment, first_profile.size(), first_t
+			)
+			var second_through := _street_hit_is_through(
+				second_segment, second_profile.size(), second_t
+			)
 			if !first_through and !second_through:
 				# Both streets meet at their own endpoints: this is a shared-corner
 				# junction handled by kerb/footpath mitering, not by clipping. Cutting
@@ -214,6 +249,12 @@ func _append_pair_cuts(
 			)
 
 
+func _street_hit_is_through(segment_index: int, profile_size: int, segment_t: float) -> bool:
+	var is_global_start := segment_index == 0 and segment_t <= EPSILON
+	var is_global_end := segment_index == profile_size - 2 and segment_t >= 1.0 - EPSILON
+	return !is_global_start and !is_global_end
+
+
 func _append_cut(
 	cuts: Array,
 	segment_index: int,
@@ -226,10 +267,24 @@ func _append_cut(
 	if segment_length <= EPSILON or angle_sine < MIN_CROSS_ANGLE_SINE:
 		return
 	var half_t := other_road_half_width / (segment_length * angle_sine)
+	var start_t := clampf(intersection_t - half_t, 0.0, 1.0)
+	var end_t := clampf(intersection_t + half_t, 0.0, 1.0)
+	for cut_index in range(cuts.size()):
+		var existing: Dictionary = cuts[cut_index]
+		if int(existing.get("segment_index", -1)) != segment_index:
+			continue
+		if (
+			absf(float(existing.get("start_t", 0.0)) - start_t) > EPSILON
+			or absf(float(existing.get("end_t", 0.0)) - end_t) > EPSILON
+		):
+			continue
+		existing["clip_road"] = bool(existing.get("clip_road", false)) or clip_road
+		cuts[cut_index] = existing
+		return
 	cuts.append({
 		"segment_index": segment_index,
-		"start_t": clampf(intersection_t - half_t, 0.0, 1.0),
-		"end_t": clampf(intersection_t + half_t, 0.0, 1.0),
+		"start_t": start_t,
+		"end_t": end_t,
 		"clip_road": clip_road,
 	})
 

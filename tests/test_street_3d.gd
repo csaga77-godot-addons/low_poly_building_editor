@@ -36,8 +36,11 @@ func _run_checks() -> void:
 	_validate_impossible_stairs()
 	_validate_terrain_profile_and_manual_override()
 	_validate_sibling_intersection_merging()
+	_validate_internal_profile_intersections()
 	_validate_intersection_kerb_connection()
 	_validate_stair_junction_connection()
+	_validate_bounded_shallow_junction()
+	_validate_tolerant_collinear_junction()
 	_validate_street_json_generation()
 	_validate_wireframe_and_native_transform()
 	for failure in m_failures:
@@ -201,6 +204,73 @@ func _validate_sibling_intersection_merging() -> void:
 	coordinator.queue_free()
 
 
+func _validate_internal_profile_intersections() -> void:
+	# A hit on a polyline's internal point is still a through street intersection,
+	# even though it lands at t=0/1 on the two adjacent profile segments.
+	var coordinator := Building3DScript.new() as Building3DScript
+	add_child(coordinator)
+	var through_street := BuildingFactoryScript.create_street_node(
+		coordinator,
+		PackedVector3Array([
+			Vector3(-6.0, 0.0, 0.0), Vector3.ZERO, Vector3(6.0, 0.0, 0.0),
+		])
+	) as Street3DScript
+	var branch_street := BuildingFactoryScript.create_street_node(
+		coordinator,
+		PackedVector3Array([Vector3(0.0, 0.0, -6.0), Vector3.ZERO])
+	) as Street3DScript
+	coordinator.add_child(through_street)
+	coordinator.add_child(branch_street)
+	coordinator.refresh_street_intersection_cuts()
+	var through_cuts := through_street.get_intersection_cuts()
+	var branch_cuts := branch_street.get_intersection_cuts()
+	if through_cuts.size() != 2:
+		m_failures.append(
+			"Internal-point T-junction produced %d through-street cuts, expected 2"
+			% through_cuts.size()
+		)
+	for cut: Dictionary in through_cuts:
+		if bool(cut.get("clip_road", false)):
+			m_failures.append("Internal-point T-junction clipped the through road surface")
+	if branch_cuts.size() != 1 or !bool(branch_cuts[0].get("clip_road", false)):
+		m_failures.append("Internal-point T-junction did not clip the terminating branch once")
+	coordinator.queue_free()
+
+	# When both streets cross on internal points, scene order must still own one
+	# surface instead of all four segment-pair hits being mistaken for endpoints.
+	coordinator = Building3DScript.new() as Building3DScript
+	add_child(coordinator)
+	var first_crossing := BuildingFactoryScript.create_street_node(
+		coordinator,
+		PackedVector3Array([
+			Vector3(-6.0, 0.0, 0.0), Vector3.ZERO, Vector3(6.0, 0.0, 0.0),
+		])
+	) as Street3DScript
+	var second_crossing := BuildingFactoryScript.create_street_node(
+		coordinator,
+		PackedVector3Array([
+			Vector3(0.0, 0.0, -6.0), Vector3.ZERO, Vector3(0.0, 0.0, 6.0),
+		])
+	) as Street3DScript
+	coordinator.add_child(first_crossing)
+	coordinator.add_child(second_crossing)
+	coordinator.refresh_street_intersection_cuts()
+	var first_cuts := first_crossing.get_intersection_cuts()
+	var second_cuts := second_crossing.get_intersection_cuts()
+	if first_cuts.size() != 2 or second_cuts.size() != 2:
+		m_failures.append(
+			"Internal-point crossing produced unexpected cut counts (%d / %d)"
+			% [first_cuts.size(), second_cuts.size()]
+		)
+	for cut: Dictionary in first_cuts:
+		if bool(cut.get("clip_road", false)):
+			m_failures.append("Internal-point crossing clipped the scene-order road owner")
+	for cut: Dictionary in second_cuts:
+		if !bool(cut.get("clip_road", false)):
+			m_failures.append("Internal-point crossing retained both road surfaces")
+	coordinator.queue_free()
+
+
 func _validate_intersection_kerb_connection() -> void:
 	# Four streets meeting at the origin form a + junction. Each arm should
 	# extend its kerb/footpath onto shared corners so adjacent arms connect
@@ -324,6 +394,103 @@ func _validate_stair_junction_connection() -> void:
 		if !reached:
 			m_failures.append("Stair-bearing junction mesh did not reach its shared %s" % field)
 	coordinator.queue_free()
+
+
+func _validate_bounded_shallow_junction() -> void:
+	# Infinite-line miters explode at shallow endpoint angles. The shared corners
+	# must stay inside the same three-width envelope used by ordinary path bends.
+	var coordinator := Building3DScript.new() as Building3DScript
+	add_child(coordinator)
+	var angle := deg_to_rad(2.0)
+	var arms: Array[Street3DScript] = []
+	for end_point: Vector3 in [
+		Vector3(8.0, 0.0, 0.0),
+		Vector3(cos(angle) * 8.0, 0.0, sin(angle) * 8.0),
+	]:
+		var arm := BuildingFactoryScript.create_street_node(
+			coordinator, PackedVector3Array([Vector3.ZERO, end_point])
+		) as Street3DScript
+		coordinator.add_child(arm)
+		arms.append(arm)
+	coordinator.refresh_street_intersection_cuts()
+	for arm: Street3DScript in arms:
+		var join: Dictionary = arm.get_end_joins().get("start", {})
+		if join.is_empty():
+			m_failures.append("Shallow endpoint junction produced no bounded join")
+			continue
+		for field: String in [
+			"left_road", "right_road", "left_kerb", "right_kerb",
+			"left_foot", "right_foot",
+		]:
+			if !join.has(field):
+				m_failures.append("Shallow endpoint junction omitted %s" % field)
+				continue
+			var ring_offset := arm.road_width * 0.5
+			if field.ends_with("kerb"):
+				ring_offset += arm.kerb_width
+			elif field.ends_with("foot"):
+				ring_offset += arm.kerb_width + arm.footpath_width
+			var point: Vector3 = join[field]
+			var distance := Vector2(point.x, point.z).length()
+			if distance > ring_offset * 3.0 + 0.01:
+				m_failures.append(
+					"Shallow endpoint %s escaped its bounded miter (%.2f > %.2f)"
+					% [field, distance, ring_offset * 3.0]
+				)
+	coordinator.queue_free()
+
+
+func _validate_tolerant_collinear_junction() -> void:
+	# Endpoint tolerance is useful for authored/sample noise, but all accepted
+	# arms must render against one transient centre even when their lines are
+	# parallel and therefore have no conventional miter intersection.
+	var coordinator := Building3DScript.new() as Building3DScript
+	add_child(coordinator)
+	var left := BuildingFactoryScript.create_street_node(
+		coordinator,
+		PackedVector3Array([Vector3(-6.0, 0.0, 0.0), Vector3.ZERO])
+	) as Street3DScript
+	var right := BuildingFactoryScript.create_street_node(
+		coordinator,
+		PackedVector3Array([Vector3(0.04, 0.01, 0.0), Vector3(6.0, 0.01, 0.0)])
+	) as Street3DScript
+	coordinator.add_child(left)
+	coordinator.add_child(right)
+	coordinator.refresh_street_intersection_cuts()
+	var left_join: Dictionary = left.get_end_joins().get("end", {})
+	var right_join: Dictionary = right.get_end_joins().get("start", {})
+	var expected := Vector3(0.02, 0.005, 0.0)
+	if !left_join.has("junction") or !right_join.has("junction"):
+		m_failures.append("Tolerant collinear endpoints received no canonical junction")
+	else:
+		var left_junction: Vector3 = left_join["junction"]
+		var right_junction: Vector3 = right_join["junction"]
+		if left_junction.distance_to(expected) > 0.0001:
+			m_failures.append("Tolerant endpoint junction was not centred between its arms")
+		if left_junction.distance_to(right_junction) > 0.0001:
+			m_failures.append("Tolerant collinear arms received different junction centres")
+	for street: Street3DScript in [left, right]:
+		for z in [-street.road_width * 0.5, street.road_width * 0.5]:
+			if !_mesh_has_parent_plan_vertex(
+				street, Vector2(expected.x, z), street.road_color
+			):
+				m_failures.append("Tolerant collinear street mesh did not reach the shared junction")
+	coordinator.queue_free()
+
+
+func _mesh_has_parent_plan_vertex(street: Street3DScript, target: Vector2, color: Color) -> bool:
+	if street.mesh == null or street.mesh.get_surface_count() <= 0:
+		return false
+	var arrays: Array = street.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	for vertex_index in range(vertices.size()):
+		if !_colors_near(colors[vertex_index], color):
+			continue
+		var parent_point := street.position + vertices[vertex_index]
+		if Vector2(parent_point.x, parent_point.z).distance_to(target) <= 0.01:
+			return true
+	return false
 
 
 func _corner_key(point: Vector3) -> String:
