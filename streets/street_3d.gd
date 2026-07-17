@@ -56,8 +56,10 @@ signal source_geometry_changed
 		_notify_terrain_corridor_changed()
 @export var road_color := Color(0.38, 0.37, 0.34, 1.0):
 	set(value):
+		if road_color.is_equal_approx(value):
+			return
 		road_color = value
-		_request_rebuild()
+		_request_rebuild(false)
 
 @export_group("Kerb")
 @export_range(0.01, 2.0, 0.01, "or_greater") var kerb_width := 0.18:
@@ -71,8 +73,10 @@ signal source_geometry_changed
 		_request_rebuild()
 @export var kerb_color := Color(0.66, 0.64, 0.59, 1.0):
 	set(value):
+		if kerb_color.is_equal_approx(value):
+			return
 		kerb_color = value
-		_request_rebuild()
+		_request_rebuild(false)
 
 @export_group("Footpath")
 @export_range(0.05, 10.0, 0.05, "or_greater") var footpath_width := 1.1:
@@ -86,8 +90,10 @@ signal source_geometry_changed
 		_request_rebuild()
 @export var footpath_color := Color(0.72, 0.67, 0.57, 1.0):
 	set(value):
+		if footpath_color.is_equal_approx(value):
+			return
 		footpath_color = value
-		_request_rebuild()
+		_request_rebuild(false)
 
 @export_group("Automatic Footpath Stairs")
 @export_range(0.0, 89.0, 0.1) var stair_threshold_degrees := 25.0:
@@ -131,6 +137,7 @@ signal source_geometry_changed
 
 var m_is_ready := false
 var m_rebuild_queued := false
+var m_rebuild_collision_queued := false
 var m_last_build_stats := {}
 var m_preserve_profile_on_path_change := false
 var m_intersection_cuts: Array[Dictionary] = []
@@ -291,9 +298,10 @@ func get_validation_errors() -> Array[String]:
 
 
 func rebuild_street_mesh(rebuild_collision := true) -> void:
+	m_rebuild_queued = false
+	m_rebuild_collision_queued = false
 	_begin_generated_mesh_rebuild()
 	if rebuild_collision:
-		m_rebuild_queued = false
 		_clear_generated_children()
 	_sync_transform_from_path()
 	var errors := get_validation_errors()
@@ -443,11 +451,23 @@ func _street_mesh_source_signature() -> int:
 	])
 
 
-func _request_rebuild() -> void:
-	if !m_is_ready or m_rebuild_queued:
+func _request_rebuild(rebuild_collision := true) -> void:
+	if !m_is_ready:
+		return
+	m_rebuild_collision_queued = m_rebuild_collision_queued or rebuild_collision
+	if m_rebuild_queued:
 		return
 	m_rebuild_queued = true
-	call_deferred("rebuild_street_mesh")
+	call_deferred("_run_queued_rebuild")
+
+
+func _run_queued_rebuild() -> void:
+	if !m_rebuild_queued:
+		return
+	var rebuild_collision := m_rebuild_collision_queued
+	m_rebuild_queued = false
+	m_rebuild_collision_queued = false
+	rebuild_street_mesh(rebuild_collision)
 
 
 func _connect_profile_points() -> void:

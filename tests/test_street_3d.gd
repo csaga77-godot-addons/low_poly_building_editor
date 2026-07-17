@@ -41,6 +41,7 @@ func _run_checks() -> void:
 	_validate_stair_junction_connection()
 	_validate_bounded_shallow_junction()
 	_validate_tolerant_collinear_junction()
+	await _validate_live_color_rebuild()
 	_validate_street_json_generation()
 	_validate_wireframe_and_native_transform()
 	for failure in m_failures:
@@ -476,6 +477,34 @@ func _validate_tolerant_collinear_junction() -> void:
 			):
 				m_failures.append("Tolerant collinear street mesh did not reach the shared junction")
 	coordinator.queue_free()
+
+
+func _validate_live_color_rebuild() -> void:
+	var street: Street3DScript = _make_street(Vector3(6.0, 0.0, 0.0))
+	var collision_before := street.get_node_or_null("StreetCollision")
+	var road_target := Color(0.95, 0.1, 0.75, 1.0)
+	var kerb_target := Color(0.1, 0.85, 0.2, 1.0)
+	street.road_color = road_target
+	street.kerb_color = kerb_target
+	for _frame in range(3):
+		await get_tree().process_frame
+	var arrays: Array = street.mesh.surface_get_arrays(0)
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var found_road := false
+	var found_kerb := false
+	for color: Color in colors:
+		found_road = found_road or _colors_near(color, road_target)
+		found_kerb = found_kerb or _colors_near(color, kerb_target)
+	if !found_road:
+		m_failures.append("Live Road Color edit did not update street vertex colors")
+	if !found_kerb:
+		m_failures.append("Live Kerb Color edit did not update street vertex colors")
+	if street.get_node_or_null("StreetCollision") != collision_before:
+		m_failures.append("Color-only street edit unnecessarily rebuilt collision")
+	var material := street.material_override as StandardMaterial3D
+	if material == null or !material.vertex_color_use_as_albedo:
+		m_failures.append("Street material did not display live vertex-color edits")
+	street.queue_free()
 
 
 func _mesh_has_parent_plan_vertex(street: Street3DScript, target: Vector2, color: Color) -> bool:

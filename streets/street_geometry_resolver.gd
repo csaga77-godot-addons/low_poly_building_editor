@@ -21,16 +21,25 @@ func _init(streets: Array) -> void:
 
 func refresh_street_intersection_cuts() -> void:
 	var cuts_by_street: Dictionary = {}
+	var profiles: Array[PackedVector3Array] = []
+	var profile_bounds: Array[Rect2] = []
 	for street: Street3D in m_streets:
 		cuts_by_street[street] = []
+		var profile := street.get_geometry_profile()
+		profiles.append(profile)
+		profile_bounds.append(_profile_plan_bounds(profile))
 	for first_index in range(m_streets.size()):
 		var first := m_streets[first_index]
-		var first_profile := first.get_geometry_profile()
+		var first_profile := profiles[first_index]
 		for second_index in range(first_index + 1, m_streets.size()):
 			var second := m_streets[second_index]
-			var second_profile := second.get_geometry_profile()
+			if !profile_bounds[first_index].intersects(
+				profile_bounds[second_index], true
+			):
+				continue
+			var second_profile := profiles[second_index]
 			_append_pair_cuts(first, first_profile, second, second_profile, cuts_by_street)
-	var joins_by_street := _compute_end_joins()
+	var joins_by_street := _compute_end_joins(profiles)
 	for street: Street3D in m_streets:
 		street.set_intersection_geometry(
 			cuts_by_street.get(street, []), joins_by_street.get(street, {})
@@ -40,10 +49,11 @@ func refresh_street_intersection_cuts() -> void:
 ## Groups coincident street endpoints into junctions and, for each pair of
 ## angularly adjacent arms, extends their touching road/kerb/footpath edges onto
 ## a shared miter corner so the kerbs and footpaths connect across the junction.
-func _compute_end_joins() -> Dictionary:
+func _compute_end_joins(profiles: Array[PackedVector3Array]) -> Dictionary:
 	var ends: Array[Dictionary] = []
-	for street: Street3D in m_streets:
-		var profile := street.get_geometry_profile()
+	for street_index in range(m_streets.size()):
+		var street := m_streets[street_index]
+		var profile := profiles[street_index]
 		if profile.size() < 2:
 			continue
 		ends.append({
@@ -96,6 +106,20 @@ func _compute_end_joins() -> Dictionary:
 			_assign_corner(result, arm, true, corner_road, corner_kerb, corner_foot)
 			_assign_corner(result, next_arm, false, corner_road, corner_kerb, corner_foot)
 	return result
+
+
+func _profile_plan_bounds(profile: PackedVector3Array) -> Rect2:
+	if profile.is_empty():
+		return Rect2()
+	var minimum := Vector2(profile[0].x, profile[0].z)
+	var maximum := minimum
+	for index in range(1, profile.size()):
+		var point := Vector2(profile[index].x, profile[index].z)
+		minimum.x = minf(minimum.x, point.x)
+		minimum.y = minf(minimum.y, point.y)
+		maximum.x = maxf(maximum.x, point.x)
+		maximum.y = maxf(maximum.y, point.y)
+	return Rect2(minimum, maximum - minimum).grow(EPSILON)
 
 
 func _canonical_junction(group: Array[Dictionary]) -> Vector3:
