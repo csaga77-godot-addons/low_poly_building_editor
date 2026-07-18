@@ -12,7 +12,7 @@ const StreetProfilePointScript := preload(
 const GENERATED_META := &"street_generated"
 const PREVIEW_META := &"building_editor_preview"
 const NETWORK_SEGMENT_META := &"street_network_segment"
-const MESH_GEOMETRY_VERSION := 5
+const MESH_GEOMETRY_VERSION := 6
 const EPSILON := 0.00001
 
 signal terrain_profile_resampled(sample_count: int)

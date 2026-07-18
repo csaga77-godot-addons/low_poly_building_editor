@@ -16,6 +16,7 @@ func _ready() -> void:
 
 func _run_checks() -> void:
 	_validate_five_arm_junction_and_asymmetric_profile()
+	_validate_three_arm_junction_surface_connection()
 	_validate_adaptive_cubic_sampling()
 	_validate_same_level_crossing_topology()
 	_validate_vertical_crossing_independence()
@@ -68,6 +69,66 @@ func _validate_five_arm_junction_and_asymmetric_profile() -> void:
 		or !is_equal_approx(first_child.get_side_footpath_width(false), 1.6)
 	):
 		m_failures.append("Network segment lost its asymmetric section widths")
+	network.queue_free()
+
+
+func _validate_three_arm_junction_surface_connection() -> void:
+	var network := _make_network()
+	var profile := StreetSectionProfile.new()
+	var paths: Array[PackedVector3Array] = [
+		PackedVector3Array([Vector3.ZERO, Vector3(8.0, 0.0, 0.0)]),
+		PackedVector3Array([Vector3.ZERO, Vector3(-8.0, 0.0, 0.0)]),
+		PackedVector3Array([Vector3.ZERO, Vector3(0.0, 0.0, 8.0)]),
+	]
+	network.add_paths(paths, profile, &"test", false)
+	network.rebuild_network()
+	var central := network.find_nearest_junction(Vector3.ZERO, 0.01)
+	if central.is_empty():
+		m_failures.append("Three-arm network omitted its central junction")
+		network.queue_free()
+		return
+	var central_id := String(central["junction_id"])
+	if network.network_data.incident_segments(central_id).size() != 3:
+		m_failures.append("Three-arm network central junction does not report degree three")
+	var junction_mesh := _junction_child(network, central_id)
+	if junction_mesh == null or junction_mesh.mesh == null:
+		m_failures.append("Three-arm network did not generate its dedicated centre mesh")
+	elif !_mesh_covers_parent_plan_point(
+		junction_mesh,
+		Vector3(0.0, 0.0, -profile.road_width * 0.25),
+		profile.road_color
+	):
+		m_failures.append("Three-arm network centre mesh left its outer road wedge open")
+	var checked_corner_count := 0
+	for segment: StreetSegmentData in network.network_data.incident_segments(central_id):
+		var street := _segment_child(network, segment.stable_id)
+		if street == null:
+			m_failures.append("Three-arm network omitted an incident segment mesh")
+			continue
+		var key := "start" if segment.start_junction_id == central_id else "end"
+		var joins: Dictionary = street.get_end_joins().get(key, {})
+		for field: String in [
+			"left_road", "right_road",
+			"left_kerb", "right_kerb",
+			"left_foot", "right_foot",
+		]:
+			if !joins.has(field):
+				continue
+			checked_corner_count += 1
+			var target_color := street.road_color
+			if field.ends_with("kerb"):
+				target_color = street.kerb_color
+			elif field.ends_with("foot"):
+				target_color = street.footpath_color
+			if !_mesh_reaches_parent_point(street, joins[field], target_color):
+				m_failures.append(
+					"Three-arm network segment did not reach its shared %s corner" % field
+				)
+	if checked_corner_count != 12:
+		m_failures.append(
+			"Three-arm network supplied %d shared ring corners, expected 12"
+			% checked_corner_count
+		)
 	network.queue_free()
 
 
@@ -257,3 +318,73 @@ func _junction_child(network: StreetNetwork3DScript, junction_id: String) -> Str
 		):
 			return child
 	return null
+
+
+func _mesh_reaches_parent_point(street: Street3D, parent_point: Vector3, color: Color) -> bool:
+	if street.mesh == null or street.mesh.get_surface_count() <= 0:
+		return false
+	var local_point := street.to_local(street.get_parent_node_3d().to_global(parent_point))
+	var arrays: Array = street.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	for vertex_index in range(vertices.size()):
+		if !_colors_near(colors[vertex_index], color):
+			continue
+		if Vector2(
+			vertices[vertex_index].x - local_point.x,
+			vertices[vertex_index].z - local_point.z
+		).length() <= 0.01:
+			return true
+	return false
+
+
+func _mesh_covers_parent_plan_point(
+	mesh_instance: MeshInstance3D, parent_point: Vector3, color: Color
+) -> bool:
+	var local_point_3d := mesh_instance.to_local(
+		mesh_instance.get_parent_node_3d().to_global(parent_point)
+	)
+	var local_point := Vector2(local_point_3d.x, local_point_3d.z)
+	var arrays: Array = mesh_instance.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	for triangle_index in range(0, indices.size(), 3):
+		var a_index := indices[triangle_index]
+		var b_index := indices[triangle_index + 1]
+		var c_index := indices[triangle_index + 2]
+		if normals[a_index].y < 0.9:
+			continue
+		if (
+			!_colors_near(colors[a_index], color)
+			or !_colors_near(colors[b_index], color)
+			or !_colors_near(colors[c_index], color)
+		):
+			continue
+		if _point_in_triangle(
+			local_point,
+			Vector2(vertices[a_index].x, vertices[a_index].z),
+			Vector2(vertices[b_index].x, vertices[b_index].z),
+			Vector2(vertices[c_index].x, vertices[c_index].z)
+		):
+			return true
+	return false
+
+
+func _point_in_triangle(point: Vector2, a: Vector2, b: Vector2, c: Vector2) -> bool:
+	var ab := (b - a).cross(point - a)
+	var bc := (c - b).cross(point - b)
+	var ca := (a - c).cross(point - c)
+	var has_negative := ab < -0.0001 or bc < -0.0001 or ca < -0.0001
+	var has_positive := ab > 0.0001 or bc > 0.0001 or ca > 0.0001
+	return !(has_negative and has_positive)
+
+
+func _colors_near(first: Color, second: Color, tolerance := 0.01) -> bool:
+	return (
+		absf(first.r - second.r) <= tolerance
+		and absf(first.g - second.g) <= tolerance
+		and absf(first.b - second.b) <= tolerance
+		and absf(first.a - second.a) <= tolerance
+	)

@@ -71,7 +71,7 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	# Applied inline (not via a helper) so the writes land on these local packed
 	# arrays; passing packed arrays into a mutating helper is copy-on-write unsafe.
 	var external_junction_surfaces := bool(settings.get("external_junction_surfaces", false))
-	if !start_side.is_empty() and !external_junction_surfaces:
+	if !start_side.is_empty():
 		if start_side.has("junction"):
 			start_junction = start_side["junction"]
 			var start_delta := start_junction - profile[0]
@@ -93,7 +93,7 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 			foot_left[0] = _override_terminal(foot_left[0], start_side["left_foot"])
 		if start_side.has("right_foot"):
 			foot_right[0] = _override_terminal(foot_right[0], start_side["right_foot"])
-	if !end_side.is_empty() and last_index > 0 and !external_junction_surfaces:
+	if !end_side.is_empty() and last_index > 0:
 		if end_side.has("junction"):
 			end_junction = end_side["junction"]
 			var end_delta := end_junction - profile[last_index]
@@ -119,12 +119,12 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	# Fill the junction centre: a triangle wedge from the junction point out to the
 	# two retreated road corners. Adjacent arms' wedges fan around the shared point
 	# and tile the intersection with no overlap or hole.
-	if !start_side.is_empty():
+	if !start_side.is_empty() and !external_junction_surfaces:
 		_append_road_wedge(
 			start_junction, road_left[0], road_right[0], road_thickness, road_color,
 			vertices, normals, colors, indices
 		)
-	if !end_side.is_empty() and last_index > 0:
+	if !end_side.is_empty() and last_index > 0 and !external_junction_surfaces:
 		_append_road_wedge(
 			end_junction, road_left[last_index], road_right[last_index],
 			road_thickness, road_color, vertices, normals, colors, indices

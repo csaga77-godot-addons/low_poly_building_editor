@@ -585,20 +585,33 @@ func _rebuild_junction_nodes(streets: Array[Street3D]) -> void:
 	for junction: StreetJunctionData in network_data.junctions:
 		if junction == null:
 			continue
+		var incident_segments := network_data.incident_segments(junction.stable_id)
 		var road_corners := PackedVector3Array()
 		var foot_corners := PackedVector3Array()
-		for segment: StreetSegmentData in network_data.incident_segments(junction.stable_id):
+		for segment: StreetSegmentData in incident_segments:
 			var street: Street3D = segment_nodes.get(segment.stable_id)
 			if street == null:
 				continue
 			var key := "start" if segment.start_junction_id == junction.stable_id else "end"
 			var joins: Dictionary = street.get_end_joins().get(key, {})
-			for field in ["left_road", "right_road"]:
-				if joins.has(field):
-					road_corners.append(joins[field])
-			for field in ["left_foot", "right_foot"]:
-				if joins.has(field):
-					foot_corners.append(joins[field])
+			if joins.is_empty():
+				continue
+			for left_side: bool in [true, false]:
+				var prefix := "left_" if left_side else "right_"
+				var road_field := prefix + "road"
+				var foot_field := prefix + "foot"
+				if joins.has(road_field):
+					road_corners.append(Vector3(joins[road_field]))
+				elif incident_segments.size() >= 3:
+					road_corners.append(
+						_terminal_ring_point(street, key, left_side, 0, junction.position)
+					)
+				if joins.has(foot_field):
+					foot_corners.append(Vector3(joins[foot_field]))
+				elif incident_segments.size() >= 3:
+					foot_corners.append(
+						_terminal_ring_point(street, key, left_side, 2, junction.position)
+					)
 		if road_corners.size() < 2:
 			continue
 		var section := _first_incident_profile(junction.stable_id)
@@ -622,6 +635,29 @@ func _rebuild_junction_nodes(streets: Array[Street3D]) -> void:
 		var stale: StreetJunction3D = existing[junction_id]
 		remove_child(stale)
 		stale.queue_free()
+
+
+func _terminal_ring_point(
+	street: Street3D,
+	end_key: String,
+	left_side: bool,
+	ring: int,
+	junction_position: Vector3
+) -> Vector3:
+	var profile := street.get_geometry_profile()
+	if profile.size() < 2:
+		return junction_position
+	var direction := Vector3.ZERO
+	if end_key == "start":
+		direction = _plan_direction(profile[0], profile[1])
+	else:
+		var last := profile.size() - 1
+		direction = _plan_direction(profile[last - 1], profile[last])
+	var normal := Vector3(-direction.z, 0.0, direction.x)
+	var signed_offset := street.get_ring_offset(left_side, ring)
+	if !left_side:
+		signed_offset *= -1.0
+	return junction_position + normal * signed_offset
 
 
 func _connect_same_level_crossings_internal() -> Array[String]:
@@ -990,3 +1026,8 @@ func _smooth_profile_heights(
 
 func _plan_distance(a: Vector3, b: Vector3) -> float:
 	return Vector2(b.x - a.x, b.z - a.z).length()
+
+
+func _plan_direction(a: Vector3, b: Vector3) -> Vector3:
+	var delta := Vector3(b.x - a.x, 0.0, b.z - a.z)
+	return Vector3.ZERO if delta.length_squared() <= EPSILON else delta.normalized()

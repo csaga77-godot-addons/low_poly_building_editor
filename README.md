@@ -125,9 +125,11 @@ one explicit junction, while vertically separated crossings remain topologically
 Follow-terrain segments use a smoothed sampled profile; graded segments interpolate between
 junction elevations; manual segments retain their authored profile. Steep adjacent samples
 are grouped with entry/exit hysteresis into one coherent footpath stair run, while short
-terrain ripples remain ramps. Segment children sweep road/kerb/footpath geometry and a
-dedicated `StreetJunction3D` owns each multi-road centre surface. Cross-sections may use
-different left/right kerb and footpath widths.
+terrain ripples remain ramps. Segment children sweep road/kerb/footpath geometry through
+their shared miter corners, while a dedicated `StreetJunction3D` closes each multi-road centre
+from the complete mitered and terminal-corner boundary; this keeps two-, T-, X-, and
+higher-degree junctions closed without overlapping arm-owned road wedges. Cross-sections may
+use different left/right kerb and footpath widths.
 
 `LowPolyTerrain3D` discovers either the network's multi-corridor contract or a legacy
 `Street3D` source, lowers/feathers its supporting bed, and includes junction polygons in
