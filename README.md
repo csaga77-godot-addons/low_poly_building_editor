@@ -120,6 +120,11 @@ polyline curves, vertical policy, and reusable asymmetric `StreetSectionProfile`
 Dragging a junction rebuilds only its incident segments; Shift-click splits a segment and
 Option/Alt-click removes a junction through Godot undo/redo. Same-level crossings split into
 one explicit junction, while vertically separated crossings remain topologically independent.
+A new section that crosses inside an existing junction's cross-section footprint reuses that
+junction instead of creating overlapping nearby junction geometry.
+Non-adjacent spans of one self-intersecting polyline are likewise split into an explicit
+four-approach junction; the enclosed traversal receives a normal degree-two split point so
+the serialized graph stays valid without losing the authored road shape.
 
 `StreetCurveSampler` adaptively subdivides cubic curves by chord error and tangent angle.
 Follow-terrain segments use a smoothed sampled profile; graded segments interpolate between
@@ -128,8 +133,11 @@ are grouped with entry/exit hysteresis into one coherent footpath stair run, whi
 terrain ripples remain ramps. Segment children sweep road/kerb/footpath geometry through
 their shared miter corners, while a dedicated `StreetJunction3D` closes each multi-road centre
 from the complete mitered and terminal-corner boundary; this keeps two-, T-, X-, and
-higher-degree junctions closed without overlapping arm-owned road wedges. Cross-sections may
-use different left/right kerb and footpath widths.
+higher-degree junctions closed without overlapping arm-owned road wedges. Each section can be
+Road Only, Footpath Only, or Road + Footpath. Road Only suppresses kerbs, side paths, and
+automatic stairs; Footpath Only uses the authored centre width, footpath material, and centre
+stairs; Road + Footpath retains the full asymmetric section with independent left/right widths.
+At a mixed-mode junction, a road centre surface takes precedence over a Footpath Only surface.
 
 `LowPolyTerrain3D` discovers either the network's multi-corridor contract or a legacy
 `Street3D` source, lowers/feathers its supporting bed, and includes junction polygons in

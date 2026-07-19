@@ -348,6 +348,8 @@ func _segment_intersection(
 
 
 func _segment_uses_stairs(street: Street3D, a: Vector3, b: Vector3) -> bool:
+	if !street.supports_footpath_stairs():
+		return false
 	var run := _plan_length(a, b)
 	if run <= EPSILON:
 		return false

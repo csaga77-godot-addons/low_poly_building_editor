@@ -327,6 +327,11 @@ func adapt_stair_constraints(minimum_tread_depth: float) -> void:
 	for segment: StreetSegmentData in network_data.segments:
 		if segment == null or segment.section_profile == null:
 			continue
+		if (
+			segment.section_profile.cross_section_mode
+			== StreetSectionProfile.CrossSectionMode.ROAD_ONLY
+		):
+			continue
 		var required_maximum_riser := segment.section_profile.max_riser_height
 		var profile := _sample_segment(segment)
 		for index in range(profile.size() - 1):
@@ -364,6 +369,7 @@ func add_legacy_street(street: Street3D, remove_legacy := false) -> Array[String
 	if street == null:
 		return [] as Array[String]
 	var profile := StreetSectionProfile.new()
+	profile.cross_section_mode = street.cross_section_mode
 	profile.road_width = street.road_width
 	profile.road_thickness = street.road_thickness
 	profile.road_color = street.road_color
@@ -466,10 +472,12 @@ func get_world_terrain_corridors() -> Array[Dictionary]:
 			for point in footprint:
 				world_footprint.append(to_global(point))
 			var junction_id := String(child.get_meta(JUNCTION_ID_META, ""))
-			var section := _first_incident_profile(junction_id)
+			var section := _junction_surface_profile(junction_id)
 			var depth := 0.2
 			if section != null:
-				depth = maxf(section.road_thickness + section.terrain_clearance, 0.01)
+				depth = maxf(
+					section.center_surface_thickness() + section.terrain_clearance, 0.01
+				)
 			corridors.append({
 				"polygon": world_footprint,
 				"bed_depth": depth,
@@ -549,6 +557,7 @@ func _configure_segment_street(street: Street3D, segment: StreetSegmentData) -> 
 	street.set_meta(SEGMENT_ID_META, segment.stable_id)
 	street.path_points = _sample_segment(segment)
 	street.profile_points = []
+	street.cross_section_mode = profile.cross_section_mode
 	street.road_width = profile.road_width
 	street.road_thickness = profile.road_thickness
 	street.road_color = profile.road_color
@@ -614,7 +623,7 @@ func _rebuild_junction_nodes(streets: Array[Street3D]) -> void:
 					)
 		if road_corners.size() < 2:
 			continue
-		var section := _first_incident_profile(junction.stable_id)
+		var section := _junction_surface_profile(junction.stable_id)
 		if section == null:
 			section = StreetSectionProfile.new()
 		var node: StreetJunction3D = existing.get(junction.stable_id)
@@ -627,7 +636,7 @@ func _rebuild_junction_nodes(streets: Array[Street3D]) -> void:
 		active[junction.stable_id] = true
 		node.configure(
 			junction.stable_id, junction.position, road_corners, foot_corners,
-			section.road_thickness, section.road_color, generate_collision
+			section.center_surface_thickness(), section.center_surface_color(), generate_collision
 		)
 	for junction_id: String in existing:
 		if active.has(junction_id):
@@ -666,18 +675,31 @@ func _connect_same_level_crossings_internal() -> Array[String]:
 		var crossing := _find_first_same_level_crossing()
 		if crossing.is_empty():
 			break
-		var first := network_data.find_segment(String(crossing["first_segment_id"]))
-		var second := network_data.find_segment(String(crossing["second_segment_id"]))
+		var first_id := String(crossing["first_segment_id"])
+		var second_id := String(crossing["second_segment_id"])
+		var first := network_data.find_segment(first_id)
+		var second := network_data.find_segment(second_id)
 		if first == null or second == null:
 			break
+		if first_id == second_id:
+			var self_result := _split_self_crossing_segment(first, crossing)
+			if self_result.is_empty():
+				break
+			changed.append_array(self_result.get("segment_ids", []))
+			continue
 		var point: Vector3 = crossing["point"]
-		var junction_id := _endpoint_junction_at(first, point)
-		if junction_id.is_empty():
-			junction_id = _endpoint_junction_at(second, point)
+		var junction_id := _crossing_junction_at(first, second, point)
 		if junction_id.is_empty():
 			junction_id = network_data.add_junction(
 				point, "", StreetJunctionData.ElevationMode.MANUAL, &"auto_intersection"
 			).stable_id
+		else:
+			var existing_junction := network_data.find_junction(junction_id)
+			if existing_junction != null:
+				# Split against the canonical centre. The intersected endpoint arm then
+				# remains intact, while the crossing section bends into that junction
+				# instead of producing a second, overlapping junction nearby.
+				point = existing_junction.position
 		var first_result := _split_segment_with_junction(first, point, junction_id)
 		var refreshed_second := network_data.find_segment(second.stable_id)
 		var second_result: Dictionary = {}
@@ -700,10 +722,11 @@ func _find_first_same_level_crossing() -> Dictionary:
 	for first_index in range(network_data.segments.size()):
 		var first := network_data.segments[first_index]
 		var first_profile := _sample_segment(first)
+		var self_crossing := _find_segment_self_crossing(first, first_profile)
+		if !self_crossing.is_empty():
+			return self_crossing
 		for second_index in range(first_index + 1, network_data.segments.size()):
 			var second := network_data.segments[second_index]
-			if _segments_share_junction(first, second):
-				continue
 			var second_profile := _sample_segment(second)
 			for first_line in range(first_profile.size() - 1):
 				for second_line in range(second_profile.size() - 1):
@@ -723,12 +746,157 @@ func _find_first_same_level_crossing() -> Dictionary:
 					)
 					if absf(first_point.y - second_point.y) > CROSSING_HEIGHT_TOLERANCE:
 						continue
+					var point := Vector3(
+						first_point.x, (first_point.y + second_point.y) * 0.5, first_point.z
+					)
+					if _segments_share_junction_at(first, second, point):
+						continue
 					return {
 						"first_segment_id": first.stable_id,
 						"second_segment_id": second.stable_id,
-						"point": Vector3(first_point.x, (first_point.y + second_point.y) * 0.5, first_point.z),
+						"point": point,
 					}
 	return {}
+
+
+func _find_segment_self_crossing(
+	segment: StreetSegmentData, profile: PackedVector3Array
+) -> Dictionary:
+	if segment == null or profile.size() < 4:
+		return {}
+	for first_line in range(profile.size() - 1):
+		for second_line in range(first_line + 2, profile.size() - 1):
+			var hit := _segment_intersection(
+				profile[first_line], profile[first_line + 1],
+				profile[second_line], profile[second_line + 1]
+			)
+			if hit.is_empty():
+				continue
+			var first_point := profile[first_line].lerp(
+				profile[first_line + 1], float(hit["first_t"])
+			)
+			var second_point := profile[second_line].lerp(
+				profile[second_line + 1], float(hit["second_t"])
+			)
+			if absf(first_point.y - second_point.y) > CROSSING_HEIGHT_TOLERANCE:
+				continue
+			return {
+				"first_segment_id": segment.stable_id,
+				"second_segment_id": segment.stable_id,
+				"first_line": first_line,
+				"second_line": second_line,
+				"point": Vector3(
+					first_point.x, (first_point.y + second_point.y) * 0.5, first_point.z
+				),
+			}
+	return {}
+
+
+func _split_self_crossing_segment(
+	segment: StreetSegmentData, crossing: Dictionary
+) -> Dictionary:
+	if segment == null:
+		return {}
+	var profile := _sample_segment(segment)
+	var first_line := int(crossing.get("first_line", -1))
+	var second_line := int(crossing.get("second_line", -1))
+	if (
+		first_line < 0
+		or second_line < first_line + 2
+		or second_line >= profile.size() - 1
+	):
+		return {}
+	var point: Vector3 = crossing["point"]
+	var loop_split_index := -1
+	var loop_split_distance := JUNCTION_SNAP_TOLERANCE
+	for index in range(first_line + 1, second_line + 1):
+		var distance := _plan_distance(point, profile[index])
+		if distance <= loop_split_distance:
+			continue
+		loop_split_distance = distance
+		loop_split_index = index
+	if loop_split_index < 0:
+		return {}
+
+	var prefix := PackedVector3Array()
+	for index in range(first_line + 1):
+		prefix.append(profile[index])
+	prefix.append(point)
+	prefix = _remove_duplicate_points(prefix)
+	var loop_first := PackedVector3Array([point])
+	for index in range(first_line + 1, loop_split_index + 1):
+		loop_first.append(profile[index])
+	loop_first = _remove_duplicate_points(loop_first)
+	var loop_second := PackedVector3Array([profile[loop_split_index]])
+	for index in range(loop_split_index + 1, second_line + 1):
+		loop_second.append(profile[index])
+	loop_second.append(point)
+	loop_second = _remove_duplicate_points(loop_second)
+	var suffix := PackedVector3Array([point])
+	for index in range(second_line + 1, profile.size()):
+		suffix.append(profile[index])
+	suffix = _remove_duplicate_points(suffix)
+	if loop_first.size() < 2 or loop_second.size() < 2:
+		return {}
+
+	var elevation_mode := (
+		StreetJunctionData.ElevationMode.FOLLOW_TERRAIN
+		if segment.vertical_mode == StreetSegmentData.VerticalMode.FOLLOW_TERRAIN
+		else StreetJunctionData.ElevationMode.MANUAL
+	)
+	var junction_id := _endpoint_junction_at(segment, point)
+	if junction_id.is_empty():
+		junction_id = network_data.add_junction(
+			point, "", elevation_mode, &"auto_self_intersection"
+		).stable_id
+	var loop_junction := network_data.add_junction(
+		profile[loop_split_index], "", elevation_mode, &"self_intersection_split"
+	)
+	var pieces: Array[Dictionary] = []
+	if segment.start_junction_id != junction_id and prefix.size() >= 2:
+		pieces.append({
+			"start_id": segment.start_junction_id,
+			"end_id": junction_id,
+			"points": prefix,
+		})
+	pieces.append({
+		"start_id": junction_id,
+		"end_id": loop_junction.stable_id,
+		"points": loop_first,
+	})
+	pieces.append({
+		"start_id": loop_junction.stable_id,
+		"end_id": junction_id,
+		"points": loop_second,
+	})
+	if segment.end_junction_id != junction_id and suffix.size() >= 2:
+		pieces.append({
+			"start_id": junction_id,
+			"end_id": segment.end_junction_id,
+			"points": suffix,
+		})
+	var original_id := segment.stable_id
+	var section := segment.section_profile
+	var vertical_mode := segment.vertical_mode
+	var provenance := segment.provenance
+	var locked := segment.locked
+	network_data.remove_segment(original_id)
+	var segment_ids: Array[String] = []
+	for piece_index in range(pieces.size()):
+		var piece := pieces[piece_index]
+		var split_segment := network_data.add_segment(
+			String(piece["start_id"]), String(piece["end_id"]), section,
+			original_id if piece_index == 0 else "",
+			StreetSegmentData.CurveMode.POLYLINE, provenance
+		)
+		split_segment.polyline_points = piece["points"] as PackedVector3Array
+		split_segment.vertical_mode = vertical_mode
+		split_segment.locked = locked
+		segment_ids.append(split_segment.stable_id)
+	return {
+		"junction_id": junction_id,
+		"segment_ids": segment_ids,
+	}
 
 
 func _split_segment_with_junction(
@@ -868,15 +1036,21 @@ func _assign_generated_owner(child: Node) -> void:
 		child.owner = owner
 
 
-func _first_incident_profile(junction_id: String) -> StreetSectionProfile:
+func _junction_surface_profile(junction_id: String) -> StreetSectionProfile:
 	var incident := network_data.incident_segments(junction_id)
 	incident.sort_custom(func(a: StreetSegmentData, b: StreetSegmentData) -> bool:
 		return a.stable_id < b.stable_id
 	)
+	var first_footpath: StreetSectionProfile = null
 	for segment: StreetSegmentData in incident:
-		if segment.section_profile != null:
-			return segment.section_profile
-	return null
+		var profile := segment.section_profile
+		if profile == null:
+			continue
+		if profile.cross_section_mode != StreetSectionProfile.CrossSectionMode.FOOTPATH_ONLY:
+			return profile
+		if first_footpath == null:
+			first_footpath = profile
+	return first_footpath
 
 
 func _incident_segment_ids(junction_id: String) -> Array[String]:
@@ -922,6 +1096,15 @@ func _segments_share_junction(a: StreetSegmentData, b: StreetSegmentData) -> boo
 	)
 
 
+func _segments_share_junction_at(
+	a: StreetSegmentData, b: StreetSegmentData, point: Vector3
+) -> bool:
+	if !_segments_share_junction(a, b):
+		return false
+	var first_id := _endpoint_junction_at(a, point)
+	return !first_id.is_empty() and first_id == _endpoint_junction_at(b, point)
+
+
 func _endpoint_junction_at(segment: StreetSegmentData, point: Vector3) -> String:
 	var start := network_data.find_junction(segment.start_junction_id)
 	if start != null and _plan_distance(start.position, point) <= JUNCTION_SNAP_TOLERANCE:
@@ -930,6 +1113,37 @@ func _endpoint_junction_at(segment: StreetSegmentData, point: Vector3) -> String
 	if end != null and _plan_distance(end.position, point) <= JUNCTION_SNAP_TOLERANCE:
 		return end.stable_id
 	return ""
+
+
+func _crossing_junction_at(
+	first: StreetSegmentData, second: StreetSegmentData, point: Vector3
+) -> String:
+	var exact := _endpoint_junction_at(first, point)
+	if exact.is_empty():
+		exact = _endpoint_junction_at(second, point)
+	if !exact.is_empty():
+		return exact
+	var snap_distance := JUNCTION_SNAP_TOLERANCE
+	for segment: StreetSegmentData in [first, second]:
+		if segment != null and segment.section_profile != null:
+			snap_distance = maxf(
+				snap_distance, segment.section_profile.maximum_half_width()
+			)
+	var best_id := ""
+	var best_distance := INF
+	for segment: StreetSegmentData in [first, second]:
+		if segment == null:
+			continue
+		for junction_id: String in [segment.start_junction_id, segment.end_junction_id]:
+			var junction := network_data.find_junction(junction_id)
+			if junction == null or absf(junction.position.y - point.y) > CROSSING_HEIGHT_TOLERANCE:
+				continue
+			var distance := _plan_distance(junction.position, point)
+			if distance > snap_distance or distance >= best_distance:
+				continue
+			best_distance = distance
+			best_id = junction.stable_id
+	return best_id
 
 
 func _nearest_profile_location(profile: PackedVector3Array, point: Vector3) -> Dictionary:

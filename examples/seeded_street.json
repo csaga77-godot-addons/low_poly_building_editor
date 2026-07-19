@@ -5,6 +5,7 @@
   "name": "SeededHillStreet",
   "seed": 2401,
   "grid_step": 0.25,
+  "cross_section_mode": "road_and_footpath",
   "path": [
     [0.0, 0.0, 0.0],
     [4.0, 2.0, 0.0],

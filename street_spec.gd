@@ -2,10 +2,19 @@
 class_name StreetSpec
 extends "res://addons/low_poly_building_editor/building_generation_spec.gd"
 
+enum CrossSectionMode {
+	ROAD_ONLY,
+	FOOTPATH_ONLY,
+	ROAD_AND_FOOTPATH,
+}
+
 @export var path_points := PackedVector3Array([
 	Vector3.ZERO,
 	Vector3(0.0, 0.0, 8.0),
 ])
+
+@export_group("Cross Section")
+@export_enum("Road Only", "Footpath Only", "Road + Footpath") var cross_section_mode: int = CrossSectionMode.ROAD_AND_FOOTPATH
 
 @export_group("Road")
 @export_range(0.1, 20.0, 0.05, "or_greater") var road_width := 3.2
@@ -40,13 +49,25 @@ func validate() -> Array[String]:
 		errors.append("StreetSpec type must be 'street'.")
 	if path_points.size() < 2:
 		errors.append("path must contain at least two [x, y, z] points.")
-	if road_width < 0.1 or road_thickness < 0.01:
-		errors.append("Road width/thickness are below their supported minimums.")
-	if kerb_width < 0.01 or kerb_height < 0.01:
+	if cross_section_mode < CrossSectionMode.ROAD_ONLY or cross_section_mode > CrossSectionMode.ROAD_AND_FOOTPATH:
+		errors.append("cross_section_mode must be road_only, footpath_only, or road_and_footpath.")
+	if road_width < 0.1:
+		errors.append("road.width is below its supported minimum.")
+	if cross_section_mode != CrossSectionMode.FOOTPATH_ONLY and road_thickness < 0.01:
+		errors.append("road.thickness is below its supported minimum.")
+	if (
+		cross_section_mode == CrossSectionMode.ROAD_AND_FOOTPATH
+		and (kerb_width < 0.01 or kerb_height < 0.01)
+	):
 		errors.append("Kerb width/height are below their supported minimums.")
-	if footpath_width < 0.05 or footpath_thickness < 0.01:
-		errors.append("Footpath width/thickness are below their supported minimums.")
-	if max_riser_height < target_riser_height:
+	if cross_section_mode == CrossSectionMode.ROAD_AND_FOOTPATH and footpath_width < 0.05:
+		errors.append("footpath.width is below its supported minimum.")
+	if cross_section_mode != CrossSectionMode.ROAD_ONLY and footpath_thickness < 0.01:
+		errors.append("footpath.thickness is below its supported minimum.")
+	if (
+		cross_section_mode != CrossSectionMode.ROAD_ONLY
+		and max_riser_height < target_riser_height
+	):
 		errors.append("stairs.max_riser_height must be at least target_riser_height.")
 	for index in range(path_points.size() - 1):
 		var a := path_points[index]
@@ -56,6 +77,8 @@ func validate() -> Array[String]:
 			errors.append("path segment %d has zero horizontal length." % index)
 			continue
 		var rise := absf(b.y - a.y)
+		if cross_section_mode == CrossSectionMode.ROAD_ONLY:
+			continue
 		if rad_to_deg(atan2(rise, run)) <= stair_threshold_degrees + 0.0001:
 			continue
 		if ceili(rise / max_riser_height) > floori(run / min_tread_depth):
@@ -67,6 +90,9 @@ func apply_dictionary(source: Dictionary) -> Array[String]:
 	var errors: Array[String] = []
 	apply_common_dictionary(source, "street")
 	path_points = _parse_path(source.get("path", path_points), errors)
+	cross_section_mode = _parse_cross_section_mode(
+		source.get("cross_section_mode", cross_section_mode_key()), errors
+	)
 	var road := _section(source, "road", errors)
 	road_width = float(road.get("width", road_width))
 	road_thickness = float(road.get("thickness", road_thickness))
@@ -95,6 +121,7 @@ func to_dictionary() -> Dictionary:
 		serialized_path.append([point.x, point.y, point.z])
 	result.merge({
 		"path": serialized_path,
+		"cross_section_mode": cross_section_mode_key(),
 		"road": {"width": road_width, "thickness": road_thickness, "color": road_color.to_html(true)},
 		"kerb": {"width": kerb_width, "height": kerb_height, "color": kerb_color.to_html(true)},
 		"footpath": {"width": footpath_width, "thickness": footpath_thickness, "color": footpath_color.to_html(true)},
@@ -106,6 +133,33 @@ func to_dictionary() -> Dictionary:
 		},
 	})
 	return result
+
+
+func cross_section_mode_key() -> String:
+	match cross_section_mode:
+		CrossSectionMode.ROAD_ONLY:
+			return "road_only"
+		CrossSectionMode.FOOTPATH_ONLY:
+			return "footpath_only"
+		_:
+			return "road_and_footpath"
+
+
+static func _parse_cross_section_mode(value: Variant, errors: Array[String]) -> int:
+	if value is int or value is float:
+		var numeric := int(value)
+		if numeric >= CrossSectionMode.ROAD_ONLY and numeric <= CrossSectionMode.ROAD_AND_FOOTPATH:
+			return numeric
+	var key := String(value).strip_edges().to_lower()
+	match key:
+		"road_only", "road":
+			return CrossSectionMode.ROAD_ONLY
+		"footpath_only", "footpath":
+			return CrossSectionMode.FOOTPATH_ONLY
+		"road_and_footpath", "both":
+			return CrossSectionMode.ROAD_AND_FOOTPATH
+	errors.append("cross_section_mode must be road_only, footpath_only, or road_and_footpath.")
+	return CrossSectionMode.ROAD_AND_FOOTPATH
 
 
 static func _parse_path(value: Variant, errors: Array[String]) -> PackedVector3Array:

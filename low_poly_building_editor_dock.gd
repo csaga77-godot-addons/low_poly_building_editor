@@ -41,6 +41,9 @@ const FLOOR_TYPE_SOLID := "solid"
 const FLOOR_TYPE_HOLE := "hole"
 const FLOOR_STYLE_RECTANGLE := "rectangle"
 const FLOOR_STYLE_POLYGON := "polygon"
+const STREET_CROSS_SECTION_ROAD_ONLY := 0
+const STREET_CROSS_SECTION_FOOTPATH_ONLY := 1
+const STREET_CROSS_SECTION_ROAD_AND_FOOTPATH := 2
 const NEWEL_PLACEMENT_TREAD := 0
 const TREAD_STYLE_CLOSED := 0
 const TREAD_STYLE_OPEN := 1
@@ -99,6 +102,7 @@ var m_floor_thickness_spin: SpinBox
 var m_floor_color_picker: ColorPickerButton
 var m_street_grid_spin: SpinBox
 var m_street_base_height_spin: SpinBox
+var m_street_cross_section_option: OptionButton
 var m_street_road_width_spin: SpinBox
 var m_street_road_thickness_spin: SpinBox
 var m_street_road_color_picker: ColorPickerButton
@@ -511,6 +515,22 @@ func _build_street_controls(parent: VBoxContainer) -> void:
 	var header := Label.new()
 	header.text = "Street Defaults"
 	parent.add_child(header)
+	m_street_cross_section_option = OptionButton.new()
+	m_street_cross_section_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for entry: Array in [
+		["Road Only", STREET_CROSS_SECTION_ROAD_ONLY],
+		["Footpath Only", STREET_CROSS_SECTION_FOOTPATH_ONLY],
+		["Road + Footpath", STREET_CROSS_SECTION_ROAD_AND_FOOTPATH],
+	]:
+		var index := m_street_cross_section_option.get_item_count()
+		m_street_cross_section_option.add_item(String(entry[0]), int(entry[1]))
+		m_street_cross_section_option.set_item_metadata(index, int(entry[1]))
+	m_street_cross_section_option.select(STREET_CROSS_SECTION_ROAD_AND_FOOTPATH)
+	m_street_cross_section_option.item_selected.connect(_on_street_cross_section_selected)
+	_add_labeled_control(
+		parent, "Surface:", m_street_cross_section_option,
+		"Road Only uses the centre road surface; Footpath Only uses one pedestrian centre strip; Road + Footpath adds kerbs and side paths."
+	)
 	m_street_grid_spin = _make_spin(0.05, 8.0, 0.05, 0.5)
 	m_street_base_height_spin = _make_spin(-20.0, 20.0, 0.01, 0.0)
 	m_street_road_width_spin = _make_spin(0.1, 20.0, 0.05, 3.2)
@@ -531,7 +551,7 @@ func _build_street_controls(parent: VBoxContainer) -> void:
 	var controls: Array[Array] = [
 		["Grid:", m_street_grid_spin],
 		["Base Y:", m_street_base_height_spin],
-		["Road Width:", m_street_road_width_spin],
+		["Center Width:", m_street_road_width_spin],
 		["Road Depth:", m_street_road_thickness_spin],
 		["Kerb Width:", m_street_kerb_width_spin],
 		["Kerb Height:", m_street_kerb_height_spin],
@@ -559,6 +579,7 @@ func _build_street_controls(parent: VBoxContainer) -> void:
 	resample_button.tooltip_text = "Rebuild automatic profile heights from the first scene node exposing get_world_surface_height(); Manual Height profile points are preserved."
 	resample_button.pressed.connect(_on_street_resample_pressed)
 	parent.add_child(resample_button)
+	_update_street_cross_section_controls()
 
 
 func _build_stair_controls(parent: VBoxContainer) -> void:
@@ -1580,6 +1601,45 @@ func _on_street_setting_changed(_value: float) -> void:
 	_emit_street_settings()
 
 
+func _on_street_cross_section_selected(_index: int) -> void:
+	_update_street_cross_section_controls()
+	_emit_street_settings()
+
+
+func _update_street_cross_section_controls() -> void:
+	var mode := _selected_option_metadata(
+		m_street_cross_section_option, STREET_CROSS_SECTION_ROAD_AND_FOOTPATH
+	)
+	var has_road := mode != STREET_CROSS_SECTION_FOOTPATH_ONLY
+	var has_side_footpaths := mode == STREET_CROSS_SECTION_ROAD_AND_FOOTPATH
+	var has_footpath := mode != STREET_CROSS_SECTION_ROAD_ONLY
+	if m_street_road_thickness_spin != null:
+		m_street_road_thickness_spin.editable = has_road
+	if m_street_road_color_picker != null:
+		m_street_road_color_picker.disabled = !has_road
+	for spin: SpinBox in [
+		m_street_kerb_width_spin,
+		m_street_kerb_height_spin,
+		m_street_footpath_width_spin,
+	]:
+		if spin != null:
+			spin.editable = has_side_footpaths
+	if m_street_kerb_color_picker != null:
+		m_street_kerb_color_picker.disabled = !has_side_footpaths
+	if m_street_footpath_thickness_spin != null:
+		m_street_footpath_thickness_spin.editable = has_footpath
+	if m_street_footpath_color_picker != null:
+		m_street_footpath_color_picker.disabled = !has_footpath
+	for stair_spin: SpinBox in [
+		m_street_stair_threshold_spin,
+		m_street_target_riser_spin,
+		m_street_max_riser_spin,
+		m_street_min_tread_spin,
+	]:
+		if stair_spin != null:
+			stair_spin.editable = has_footpath
+
+
 func _on_street_color_changed(_color: Color) -> void:
 	_update_color_picker_icon(m_street_road_color_picker)
 	_update_color_picker_icon(m_street_kerb_color_picker)
@@ -2053,6 +2113,9 @@ func _emit_street_settings() -> void:
 	street_settings_changed.emit({
 		"grid_step": float(m_street_grid_spin.value),
 		"base_height": float(m_street_base_height_spin.value),
+		"cross_section_mode": _selected_option_metadata(
+			m_street_cross_section_option, STREET_CROSS_SECTION_ROAD_AND_FOOTPATH
+		),
 		"road_width": float(m_street_road_width_spin.value),
 		"road_thickness": float(m_street_road_thickness_spin.value),
 		"road_color": m_street_road_color_picker.color,
@@ -2640,6 +2703,11 @@ func _load_persisted_settings() -> void:
 		m_floor_color_picker.color = floor_color_variant
 	m_street_grid_spin.value = float(state.get("street_grid_step", m_street_grid_spin.value))
 	m_street_base_height_spin.value = float(state.get("street_base_height", m_street_base_height_spin.value))
+	_select_frame_sides(
+		m_street_cross_section_option,
+		int(state.get("street_cross_section_mode", STREET_CROSS_SECTION_ROAD_AND_FOOTPATH))
+	)
+	_update_street_cross_section_controls()
 	m_street_road_width_spin.value = float(state.get("street_road_width", m_street_road_width_spin.value))
 	m_street_road_thickness_spin.value = float(state.get("street_road_thickness", m_street_road_thickness_spin.value))
 	m_street_kerb_width_spin.value = float(state.get("street_kerb_width", m_street_kerb_width_spin.value))
@@ -2943,6 +3011,9 @@ func _save_persisted_settings() -> void:
 		"floor_color": m_floor_color_picker.color if m_floor_color_picker != null else Color(0.46, 0.40, 0.32, 1.0),
 		"street_grid_step": float(m_street_grid_spin.value) if m_street_grid_spin != null else 0.5,
 		"street_base_height": float(m_street_base_height_spin.value) if m_street_base_height_spin != null else 0.0,
+		"street_cross_section_mode": _selected_option_metadata(
+			m_street_cross_section_option, STREET_CROSS_SECTION_ROAD_AND_FOOTPATH
+		),
 		"street_road_width": float(m_street_road_width_spin.value) if m_street_road_width_spin != null else 3.2,
 		"street_road_thickness": float(m_street_road_thickness_spin.value) if m_street_road_thickness_spin != null else 0.18,
 		"street_road_color": m_street_road_color_picker.color if m_street_road_color_picker != null else Color(0.38, 0.37, 0.34, 1.0),

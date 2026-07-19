@@ -320,6 +320,9 @@ static func create_street_node(
 	var street := Street3DScript.new() as Street3DScript
 	street.name = _unique_child_name(building, "Street3D")
 	street.path_points = local_path_points
+	street.cross_section_mode = int(settings.get(
+		"cross_section_mode", Street3DScript.CrossSectionMode.ROAD_AND_FOOTPATH
+	))
 	street.road_width = float(settings.get("road_width", 3.2))
 	street.road_thickness = float(settings.get("road_thickness", 0.18))
 	street.road_color = Color(settings.get("road_color", Color(0.38, 0.37, 0.34, 1.0)))

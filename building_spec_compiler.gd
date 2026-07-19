@@ -215,6 +215,7 @@ static func _compile_street(spec: StreetSpecScript) -> Dictionary:
 		building,
 		spec.path_points,
 		{
+			"cross_section_mode": spec.cross_section_mode,
 			"road_width": spec.road_width,
 			"road_thickness": spec.road_thickness,
 			"road_color": spec.road_color,
@@ -249,6 +250,7 @@ static func _compile_street(spec: StreetSpecScript) -> Dictionary:
 		"grid_step": spec.grid_step,
 		"path": serialized_path,
 		"path_point_count": spec.path_points.size(),
+		"cross_section_mode": spec.cross_section_mode_key(),
 		"stair_segment_count": int(stats.get("stair_segment_count", 0)),
 		"step_count": int(stats.get("step_count", 0)),
 		"node_count": _count_authored_nodes(building, building),

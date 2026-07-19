@@ -4,6 +4,9 @@ extends RefCounted
 
 const EPSILON := 0.00001
 const MAX_MITER_SCALE := 3.0
+const CROSS_SECTION_ROAD_ONLY := 0
+const CROSS_SECTION_FOOTPATH_ONLY := 1
+const CROSS_SECTION_ROAD_AND_FOOTPATH := 2
 
 
 static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictionary:
@@ -24,6 +27,11 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	if profile.size() < 2:
 		return result
 
+	var cross_section_mode := clampi(
+		int(settings.get("cross_section_mode", CROSS_SECTION_ROAD_AND_FOOTPATH)),
+		CROSS_SECTION_ROAD_ONLY,
+		CROSS_SECTION_ROAD_AND_FOOTPATH
+	)
 	var road_half_width := maxf(float(settings.get("road_width", 3.2)) * 0.5, 0.05)
 	var kerb_width := maxf(float(settings.get("kerb_width", 0.18)), 0.0)
 	var footpath_width := maxf(float(settings.get("footpath_width", 1.1)), 0.0)
@@ -41,6 +49,21 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	var road_color := Color(settings.get("road_color", Color(0.38, 0.37, 0.34, 1.0)))
 	var kerb_color := Color(settings.get("kerb_color", Color(0.66, 0.64, 0.59, 1.0)))
 	var footpath_color := Color(settings.get("footpath_color", Color(0.72, 0.67, 0.57, 1.0)))
+	if cross_section_mode != CROSS_SECTION_ROAD_AND_FOOTPATH:
+		left_kerb_width = 0.0
+		right_kerb_width = 0.0
+		left_footpath_width = 0.0
+		right_footpath_width = 0.0
+	var center_thickness := (
+		footpath_thickness
+		if cross_section_mode == CROSS_SECTION_FOOTPATH_ONLY
+		else road_thickness
+	)
+	var center_color := (
+		footpath_color
+		if cross_section_mode == CROSS_SECTION_FOOTPATH_ONLY
+		else road_color
+	)
 	var intersection_cuts: Array = settings.get("intersection_cuts", [])
 	result["intersection_cut_count"] = intersection_cuts.size()
 	for cut: Dictionary in intersection_cuts:
@@ -121,13 +144,13 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 	# and tile the intersection with no overlap or hole.
 	if !start_side.is_empty() and !external_junction_surfaces:
 		_append_road_wedge(
-			start_junction, road_left[0], road_right[0], road_thickness, road_color,
+			start_junction, road_left[0], road_right[0], center_thickness, center_color,
 			vertices, normals, colors, indices
 		)
 	if !end_side.is_empty() and last_index > 0 and !external_junction_surfaces:
 		_append_road_wedge(
 			end_junction, road_left[last_index], road_right[last_index],
-			road_thickness, road_color, vertices, normals, colors, indices
+			center_thickness, center_color, vertices, normals, colors, indices
 		)
 
 	var stair_run_by_start: Dictionary = {}
@@ -149,12 +172,17 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 			continue
 		var side_ranges := _retained_ranges(intersection_cuts, segment_index, false)
 		var road_ranges := _retained_ranges(intersection_cuts, segment_index, true)
-		_append_sloped_band(
-			road_left[segment_index], road_right[segment_index],
-			road_left[segment_index + 1], road_right[segment_index + 1],
-			road_thickness, road_color, road_ranges, side_ranges,
-			vertices, normals, colors, indices
+		var center_uses_stairs := (
+			cross_section_mode == CROSS_SECTION_FOOTPATH_ONLY
+			and stair_run_members.has(segment_index)
 		)
+		if !center_uses_stairs:
+			_append_sloped_band(
+				road_left[segment_index], road_right[segment_index],
+				road_left[segment_index + 1], road_right[segment_index + 1],
+				center_thickness, center_color, road_ranges, side_ranges,
+				vertices, normals, colors, indices
+			)
 		if stair_run_members.has(segment_index):
 			var run_start := int(stair_run_members[segment_index])
 			if run_start != segment_index:
@@ -164,19 +192,27 @@ static func build(profile: PackedVector3Array, settings: Dictionary) -> Dictiona
 			var step_count := int(stair_run["step_count"])
 			result["stair_segment_count"] = int(result["stair_segment_count"]) + 1
 			result["step_count"] = int(result["step_count"]) + step_count
-			_append_stepped_side(
-				road_left[segment_index], kerb_left[segment_index], foot_left[segment_index],
-				road_left[run_end], kerb_left[run_end], foot_left[run_end],
-				step_count, kerb_height, footpath_thickness, kerb_color, footpath_color,
-				vertices, normals, colors, indices
-			)
-			_append_stepped_side(
-				road_right[segment_index], kerb_right[segment_index], foot_right[segment_index],
-				road_right[run_end], kerb_right[run_end], foot_right[run_end],
-				step_count, kerb_height, footpath_thickness, kerb_color, footpath_color,
-				vertices, normals, colors, indices
-			)
-		else:
+			if cross_section_mode == CROSS_SECTION_FOOTPATH_ONLY:
+				_append_stepped_center_band(
+					road_left[segment_index], road_right[segment_index],
+					road_left[run_end], road_right[run_end],
+					step_count, footpath_thickness, footpath_color,
+					vertices, normals, colors, indices
+				)
+			else:
+				_append_stepped_side(
+					road_left[segment_index], kerb_left[segment_index], foot_left[segment_index],
+					road_left[run_end], kerb_left[run_end], foot_left[run_end],
+					step_count, kerb_height, footpath_thickness, kerb_color, footpath_color,
+					vertices, normals, colors, indices
+				)
+				_append_stepped_side(
+					road_right[segment_index], kerb_right[segment_index], foot_right[segment_index],
+					road_right[run_end], kerb_right[run_end], foot_right[run_end],
+					step_count, kerb_height, footpath_thickness, kerb_color, footpath_color,
+					vertices, normals, colors, indices
+				)
+		elif cross_section_mode == CROSS_SECTION_ROAD_AND_FOOTPATH:
 			for retained_range: Vector2 in side_ranges:
 				_append_sloped_side(
 					road_left[segment_index].lerp(road_left[segment_index + 1], retained_range.x),
@@ -214,7 +250,11 @@ static func plan_stair_runs(
 	profile: PackedVector3Array, settings: Dictionary
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	if profile.size() < 2:
+	if (
+		profile.size() < 2
+		or int(settings.get("cross_section_mode", CROSS_SECTION_ROAD_AND_FOOTPATH))
+		== CROSS_SECTION_ROAD_ONLY
+	):
 		return result
 	var enter_threshold := clampf(
 		float(settings.get("stair_threshold_degrees", 25.0)), 0.0, 89.0
@@ -474,6 +514,76 @@ static func _append_sloped_side(
 		a_outer + up - Vector3.UP * footpath_thickness,
 		footpath_color.darkened(0.08), vertices, normals, colors, indices
 	)
+
+
+static func _append_stepped_center_band(
+	a_left: Vector3, a_right: Vector3,
+	b_left: Vector3, b_right: Vector3,
+	step_count: int, thickness: float, color: Color,
+	vertices: PackedVector3Array, normals: PackedVector3Array,
+	colors: PackedColorArray, indices: PackedInt32Array
+) -> void:
+	if step_count <= 0:
+		return
+	if (a_left.y + a_right.y) * 0.5 > (b_left.y + b_right.y) * 0.5:
+		var swap_left := a_left
+		a_left = b_left
+		b_left = swap_left
+		var swap_right := a_right
+		a_right = b_right
+		b_right = swap_right
+	var drop := Vector3.DOWN * thickness
+	_append_quad(
+		a_right + drop, b_right + drop, b_left + drop, a_left + drop,
+		color.darkened(0.08), vertices, normals, colors, indices
+	)
+	var total_rise := ((b_left.y + b_right.y) - (a_left.y + a_right.y)) * 0.5
+	for step_index in range(step_count):
+		var t0 := float(step_index) / float(step_count)
+		var t1 := float(step_index + 1) / float(step_count)
+		var top_y := (a_left.y + a_right.y) * 0.5 + total_rise * t1
+		var left0 := a_left.lerp(b_left, t0)
+		var left1 := a_left.lerp(b_left, t1)
+		var right0 := a_right.lerp(b_right, t0)
+		var right1 := a_right.lerp(b_right, t1)
+		left0.y = top_y
+		left1.y = top_y
+		right0.y = top_y
+		right1.y = top_y
+		_append_upward_quad(
+			left0, left1, right1, right0,
+			color, vertices, normals, colors, indices
+		)
+		var base_left0 := a_left.lerp(b_left, t0) + drop
+		var base_left1 := a_left.lerp(b_left, t1) + drop
+		var base_right0 := a_right.lerp(b_right, t0) + drop
+		var base_right1 := a_right.lerp(b_right, t1) + drop
+		_append_quad(
+			base_left0, base_left1, left1, left0,
+			color.darkened(0.06), vertices, normals, colors, indices
+		)
+		_append_quad(
+			right0, right1, base_right1, base_right0,
+			color.darkened(0.06), vertices, normals, colors, indices
+		)
+		var lower_y := (
+			(a_left.y + a_right.y) * 0.5
+			if step_index == 0
+			else top_y - total_rise / float(step_count)
+		)
+		var lower_left := left0
+		var lower_right := right0
+		lower_left.y = lower_y
+		lower_right.y = lower_y
+		_append_quad(
+			lower_left, left0, right0, lower_right,
+			color.darkened(0.05), vertices, normals, colors, indices
+		)
+		if step_index == step_count - 1:
+			_append_quad(
+				left1, base_left1, base_right1, right1,
+				color.darkened(0.05), vertices, normals, colors, indices
+			)
 
 
 static func _append_stepped_side(

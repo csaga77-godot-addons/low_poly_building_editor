@@ -12,8 +12,14 @@ const StreetProfilePointScript := preload(
 const GENERATED_META := &"street_generated"
 const PREVIEW_META := &"building_editor_preview"
 const NETWORK_SEGMENT_META := &"street_network_segment"
-const MESH_GEOMETRY_VERSION := 6
+const MESH_GEOMETRY_VERSION := 7
 const EPSILON := 0.00001
+
+enum CrossSectionMode {
+	ROAD_ONLY,
+	FOOTPATH_ONLY,
+	ROAD_AND_FOOTPATH,
+}
 
 signal terrain_profile_resampled(sample_count: int)
 signal terrain_corridor_changed()
@@ -41,6 +47,16 @@ signal source_geometry_changed
 		_disconnect_profile_points()
 		profile_points = value
 		_connect_profile_points()
+		_request_rebuild()
+		_notify_terrain_corridor_changed()
+
+@export_group("Cross Section")
+@export_enum("Road Only", "Footpath Only", "Road + Footpath") var cross_section_mode: int = CrossSectionMode.ROAD_AND_FOOTPATH:
+	set(value):
+		var normalized := clampi(value, CrossSectionMode.ROAD_ONLY, CrossSectionMode.ROAD_AND_FOOTPATH)
+		if cross_section_mode == normalized:
+			return
+		cross_section_mode = normalized
 		_request_rebuild()
 		_notify_terrain_corridor_changed()
 
@@ -319,7 +335,7 @@ func get_world_terrain_corridor() -> Dictionary:
 	return {
 		"path": world_path,
 		"half_width": get_maximum_half_width() * horizontal_scale,
-		"bed_depth": maxf(road_thickness + terrain_clearance, 0.01) * absf(parent_scale.y),
+		"bed_depth": maxf(get_center_surface_thickness() + terrain_clearance, 0.01) * absf(parent_scale.y),
 		"source": self,
 	}
 
@@ -455,6 +471,7 @@ func _find_manual_profile_match(
 
 func _geometry_settings() -> Dictionary:
 	return {
+		"cross_section_mode": cross_section_mode,
 		"road_width": road_width,
 		"road_thickness": road_thickness,
 		"road_color": road_color,
@@ -482,12 +499,16 @@ func _geometry_settings() -> Dictionary:
 
 
 func get_side_kerb_width(left_side: bool) -> float:
+	if cross_section_mode != CrossSectionMode.ROAD_AND_FOOTPATH:
+		return 0.0
 	if !use_asymmetric_cross_section:
 		return kerb_width
 	return left_kerb_width if left_side else right_kerb_width
 
 
 func get_side_footpath_width(left_side: bool) -> float:
+	if cross_section_mode != CrossSectionMode.ROAD_AND_FOOTPATH:
+		return 0.0
 	if !use_asymmetric_cross_section:
 		return footpath_width
 	return left_footpath_width if left_side else right_footpath_width
@@ -504,6 +525,18 @@ func get_ring_offset(left_side: bool, ring: int) -> float:
 
 func get_maximum_half_width() -> float:
 	return maxf(get_ring_offset(true, 2), get_ring_offset(false, 2))
+
+
+func get_center_surface_thickness() -> float:
+	return footpath_thickness if cross_section_mode == CrossSectionMode.FOOTPATH_ONLY else road_thickness
+
+
+func get_center_surface_color() -> Color:
+	return footpath_color if cross_section_mode == CrossSectionMode.FOOTPATH_ONLY else road_color
+
+
+func supports_footpath_stairs() -> bool:
+	return cross_section_mode != CrossSectionMode.ROAD_ONLY
 
 
 ## Converts the parent-local miter joins into the node-local build frame (the
@@ -530,6 +563,7 @@ func _street_mesh_source_signature() -> int:
 			serialized_profile.append([point.path_distance, point.position, point.manual_height])
 	return hash([
 		MESH_GEOMETRY_VERSION, path_points, serialized_profile,
+		cross_section_mode,
 		road_width, road_thickness, road_color,
 		kerb_width, kerb_height, kerb_color,
 		footpath_width, footpath_thickness, footpath_color,

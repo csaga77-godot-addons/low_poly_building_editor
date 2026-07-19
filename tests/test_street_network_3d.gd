@@ -17,8 +17,12 @@ func _ready() -> void:
 func _run_checks() -> void:
 	_validate_five_arm_junction_and_asymmetric_profile()
 	_validate_three_arm_junction_surface_connection()
+	_validate_footpath_only_junction_surface()
+	_validate_mixed_mode_junction_surface()
 	_validate_adaptive_cubic_sampling()
 	_validate_same_level_crossing_topology()
+	_validate_self_intersecting_section_topology()
+	_validate_new_section_crossing_existing_junction()
 	_validate_vertical_crossing_independence()
 	_validate_coherent_stair_runs()
 	_validate_legacy_migration_preserves_geometry()
@@ -132,6 +136,81 @@ func _validate_three_arm_junction_surface_connection() -> void:
 	network.queue_free()
 
 
+func _validate_footpath_only_junction_surface() -> void:
+	var network := _make_network()
+	var profile := StreetSectionProfile.new()
+	profile.cross_section_mode = StreetSectionProfile.CrossSectionMode.FOOTPATH_ONLY
+	profile.road_color = Color(0.9, 0.1, 0.1, 1.0)
+	profile.footpath_color = Color(0.1, 0.8, 0.3, 1.0)
+	network.add_path(
+		PackedVector3Array([Vector3(-6.0, 0.0, 0.0), Vector3(6.0, 0.0, 0.0)]),
+		profile, &"test", true
+	)
+	network.add_path(
+		PackedVector3Array([Vector3(0.0, 0.0, -6.0), Vector3(0.0, 0.0, 6.0)]),
+		profile, &"test", true
+	)
+	network.rebuild_network()
+	var crossing := network.find_nearest_junction(Vector3.ZERO, 0.01)
+	if crossing.is_empty():
+		m_failures.append("Footpath-only crossing omitted its junction")
+		network.queue_free()
+		return
+	var crossing_id := String(crossing["junction_id"])
+	var junction_mesh := _junction_child(network, crossing_id)
+	if junction_mesh == null or junction_mesh.mesh == null:
+		m_failures.append("Footpath-only crossing omitted its centre mesh")
+	elif (
+		!_mesh_has_color(junction_mesh, profile.footpath_color)
+		or _mesh_has_color(junction_mesh, profile.road_color)
+	):
+		m_failures.append("Footpath-only junction used the wrong centre material")
+	for segment: StreetSegmentData in network.network_data.incident_segments(crossing_id):
+		var street := _segment_child(network, segment.stable_id)
+		if street == null:
+			continue
+		if street.cross_section_mode != Street3D.CrossSectionMode.FOOTPATH_ONLY:
+			m_failures.append("Network segment lost its footpath-only mode")
+		if !is_equal_approx(street.get_maximum_half_width(), profile.road_width * 0.5):
+			m_failures.append("Footpath-only network segment retained side-band width")
+	network.queue_free()
+
+
+func _validate_mixed_mode_junction_surface() -> void:
+	var network := _make_network()
+	var footpath_profile := StreetSectionProfile.new()
+	footpath_profile.cross_section_mode = StreetSectionProfile.CrossSectionMode.FOOTPATH_ONLY
+	footpath_profile.footpath_color = Color(0.1, 0.8, 0.3, 1.0)
+	var road_profile := StreetSectionProfile.new()
+	road_profile.cross_section_mode = StreetSectionProfile.CrossSectionMode.ROAD_ONLY
+	road_profile.road_color = Color(0.85, 0.15, 0.1, 1.0)
+	# Add the footpath first so stable-ID order alone would incorrectly make it
+	# own the mixed junction surface.
+	network.add_path(
+		PackedVector3Array([Vector3(-6.0, 0.0, 0.0), Vector3(6.0, 0.0, 0.0)]),
+		footpath_profile, &"test", true
+	)
+	network.add_path(
+		PackedVector3Array([Vector3(0.0, 0.0, -6.0), Vector3(0.0, 0.0, 6.0)]),
+		road_profile, &"test", true
+	)
+	network.rebuild_network()
+	var crossing := network.find_nearest_junction(Vector3.ZERO, 0.01)
+	if crossing.is_empty():
+		m_failures.append("Mixed road/footpath crossing omitted its junction")
+		network.queue_free()
+		return
+	var junction_mesh := _junction_child(network, String(crossing["junction_id"]))
+	if junction_mesh == null or junction_mesh.mesh == null:
+		m_failures.append("Mixed road/footpath crossing omitted its centre mesh")
+	elif (
+		!_mesh_has_color(junction_mesh, road_profile.road_color)
+		or _mesh_has_color(junction_mesh, footpath_profile.footpath_color)
+	):
+		m_failures.append("Mixed road/footpath junction did not give the road surface priority")
+	network.queue_free()
+
+
 func _validate_adaptive_cubic_sampling() -> void:
 	var network := _make_network()
 	var ids := network.add_path(
@@ -173,6 +252,77 @@ func _validate_same_level_crossing_topology() -> void:
 		m_failures.append("Same-level crossing did not split into four incident segments")
 	if network.network_data.segments.size() != 4:
 		m_failures.append("Same-level crossing produced an unexpected segment count")
+	network.queue_free()
+
+
+func _validate_self_intersecting_section_topology() -> void:
+	var network := _make_network()
+	network.add_path(
+		PackedVector3Array([
+			Vector3(-6.0, 0.0, -4.0),
+			Vector3(6.0, 0.0, 4.0),
+			Vector3(-6.0, 0.0, 4.0),
+			Vector3(6.0, 0.0, -4.0),
+		]),
+		null, &"test", true
+	)
+	network.rebuild_network()
+	var crossing := network.find_nearest_junction(Vector3.ZERO, 0.01)
+	if crossing.is_empty():
+		m_failures.append("Self-intersecting section did not create a topology junction")
+		network.queue_free()
+		return
+	var crossing_id := String(crossing["junction_id"])
+	if network.network_data.incident_segments(crossing_id).size() != 4:
+		m_failures.append("Self-intersecting section did not create four crossing approaches")
+	if network.network_data.segments.size() != 4 or network.network_data.junctions.size() != 4:
+		m_failures.append("Self-intersecting section produced unexpected split topology")
+	var junction_mesh := _junction_child(network, crossing_id)
+	if junction_mesh == null or junction_mesh.mesh == null:
+		m_failures.append("Self-intersecting section did not generate its junction mesh")
+	if !network.network_data.get_validation_errors().is_empty():
+		m_failures.append("Self-intersecting section produced invalid network topology")
+	network.queue_free()
+
+
+func _validate_new_section_crossing_existing_junction() -> void:
+	var network := _make_network()
+	var profile := StreetSectionProfile.new()
+	network.add_path(
+		PackedVector3Array([Vector3(-7.0, 0.0, 0.0), Vector3(7.0, 0.0, 0.0)]),
+		profile, &"test", true
+	)
+	network.add_path(
+		PackedVector3Array([Vector3(0.0, 0.0, -7.0), Vector3(0.0, 0.0, 7.0)]),
+		profile, &"test", true
+	)
+	var original := network.find_nearest_junction(Vector3.ZERO, 0.01)
+	if original.is_empty():
+		m_failures.append("Crossing setup omitted its original junction")
+		network.queue_free()
+		return
+	var original_id := String(original["junction_id"])
+	# This centreline hits the north arm inside the existing junction footprint.
+	# It must become two more approaches to the original centre, not a second
+	# four-way junction joined by an unusably short segment.
+	network.add_path(
+		PackedVector3Array([Vector3(-7.0, 0.0, 0.5), Vector3(7.0, 0.0, 0.5)]),
+		profile, &"test", true
+	)
+	network.rebuild_network()
+	if network.network_data.incident_segments(original_id).size() != 6:
+		m_failures.append(
+			"New section crossing an existing junction did not reuse its centre"
+		)
+	if network.network_data.junctions.size() != 7 or network.network_data.segments.size() != 6:
+		m_failures.append(
+			"New section crossing an existing junction left duplicate nearby topology"
+		)
+	var centre_mesh := _junction_child(network, original_id)
+	if centre_mesh == null or centre_mesh.mesh == null:
+		m_failures.append(
+			"New section crossing an existing junction did not rebuild its centre mesh"
+		)
 	network.queue_free()
 
 
@@ -388,3 +538,14 @@ func _colors_near(first: Color, second: Color, tolerance := 0.01) -> bool:
 		and absf(first.b - second.b) <= tolerance
 		and absf(first.a - second.a) <= tolerance
 	)
+
+
+func _mesh_has_color(mesh_instance: MeshInstance3D, target: Color) -> bool:
+	if mesh_instance == null or mesh_instance.mesh == null:
+		return false
+	var arrays: Array = mesh_instance.mesh.surface_get_arrays(0)
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	for color: Color in colors:
+		if _colors_near(color, target):
+			return true
+	return false

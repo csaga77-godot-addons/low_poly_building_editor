@@ -14,6 +14,7 @@ const StreetSectionProfileScript = preload(
 var m_street_settings := {
 	"grid_step": 0.5,
 	"base_height": 0.0,
+	"cross_section_mode": StreetSectionProfileScript.CrossSectionMode.ROAD_AND_FOOTPATH,
 	"road_width": 3.2,
 	"road_thickness": 0.18,
 	"road_color": Color(0.38, 0.37, 0.34, 1.0),
@@ -316,6 +317,9 @@ func _network_for_edit(coordinator: Building3DScript) -> StreetNetwork3DScript:
 
 func _section_profile() -> StreetSectionProfileScript:
 	var profile := StreetSectionProfileScript.new() as StreetSectionProfileScript
+	profile.cross_section_mode = int(m_street_settings.get(
+		"cross_section_mode", StreetSectionProfileScript.CrossSectionMode.ROAD_AND_FOOTPATH
+	))
 	profile.road_width = float(m_street_settings.get("road_width", 3.2))
 	profile.road_thickness = float(m_street_settings.get("road_thickness", 0.18))
 	profile.road_color = Color(m_street_settings.get("road_color", Color(0.38, 0.37, 0.34, 1.0)))

@@ -6,6 +6,21 @@ extends Resource
 ## Left/right widths are explicit so unequal approaches and island footpaths do
 ## not have to be represented as overlapping Street3D nodes.
 
+enum CrossSectionMode {
+	ROAD_ONLY,
+	FOOTPATH_ONLY,
+	ROAD_AND_FOOTPATH,
+}
+
+@export_group("Cross Section")
+@export_enum("Road Only", "Footpath Only", "Road + Footpath") var cross_section_mode: int = CrossSectionMode.ROAD_AND_FOOTPATH:
+	set(value):
+		var normalized := clampi(value, CrossSectionMode.ROAD_ONLY, CrossSectionMode.ROAD_AND_FOOTPATH)
+		if cross_section_mode == normalized:
+			return
+		cross_section_mode = normalized
+		emit_changed()
+
 @export_group("Road")
 @export_range(0.1, 20.0, 0.05, "or_greater") var road_width := 3.2:
 	set(value):
@@ -151,15 +166,35 @@ extends Resource
 
 
 func left_half_width() -> float:
+	if cross_section_mode != CrossSectionMode.ROAD_AND_FOOTPATH:
+		return road_width * 0.5
 	return road_width * 0.5 + left_kerb_width + left_footpath_width
 
 
 func right_half_width() -> float:
+	if cross_section_mode != CrossSectionMode.ROAD_AND_FOOTPATH:
+		return road_width * 0.5
 	return road_width * 0.5 + right_kerb_width + right_footpath_width
 
 
 func maximum_half_width() -> float:
 	return maxf(left_half_width(), right_half_width())
+
+
+func center_surface_thickness() -> float:
+	return (
+		footpath_thickness
+		if cross_section_mode == CrossSectionMode.FOOTPATH_ONLY
+		else road_thickness
+	)
+
+
+func center_surface_color() -> Color:
+	return (
+		footpath_color
+		if cross_section_mode == CrossSectionMode.FOOTPATH_ONLY
+		else road_color
+	)
 
 
 func duplicate_profile() -> StreetSectionProfile:

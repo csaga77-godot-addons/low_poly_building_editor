@@ -13,6 +13,9 @@ const Building3DScript = preload(
 const BuildingSpecCompilerScript = preload(
 	"res://addons/low_poly_building_editor/building_spec_compiler.gd"
 )
+const StreetSpecScript = preload(
+	"res://addons/low_poly_building_editor/street_spec.gd"
+)
 const BuildingWireframeScript = preload(
 	"res://addons/low_poly_building_editor/building_wireframe.gd"
 )
@@ -31,6 +34,7 @@ func _ready() -> void:
 
 func _run_checks() -> void:
 	_validate_multi_point_ramp()
+	_validate_cross_section_modes()
 	_validate_strict_stair_threshold()
 	_validate_descending_stairs()
 	_validate_impossible_stairs()
@@ -68,6 +72,61 @@ func _validate_multi_point_ramp() -> void:
 	if street.get_node_or_null("StreetCollision") == null:
 		m_failures.append("Street did not generate collision")
 	street.queue_free()
+
+
+func _validate_cross_section_modes() -> void:
+	var road_only := BuildingFactoryScript.create_street_node(
+		self,
+		PackedVector3Array([Vector3.ZERO, Vector3(4.0, 2.0, 0.0)]),
+		{"cross_section_mode": Street3DScript.CrossSectionMode.ROAD_ONLY}
+	) as Street3DScript
+	add_child(road_only)
+	if !_mesh_contains_color(road_only, road_only.road_color):
+		m_failures.append("Road-only street omitted its road surface")
+	if (
+		_mesh_contains_color(road_only, road_only.kerb_color)
+		or _mesh_contains_color(road_only, road_only.footpath_color)
+	):
+		m_failures.append("Road-only street retained kerb or footpath surfaces")
+	if int(road_only.get_last_build_stats().get("stair_segment_count", -1)) != 0:
+		m_failures.append("Road-only street generated footpath stairs")
+	if !is_equal_approx(road_only.get_maximum_half_width(), road_only.road_width * 0.5):
+		m_failures.append("Road-only street retained side-band corridor width")
+	road_only.queue_free()
+
+	var footpath_only := BuildingFactoryScript.create_street_node(
+		self,
+		PackedVector3Array([Vector3.ZERO, Vector3(4.0, 2.0, 0.0)]),
+		{"cross_section_mode": Street3DScript.CrossSectionMode.FOOTPATH_ONLY}
+	) as Street3DScript
+	add_child(footpath_only)
+	if !_mesh_contains_color(footpath_only, footpath_only.footpath_color):
+		m_failures.append("Footpath-only street omitted its pedestrian surface")
+	if (
+		_mesh_contains_color(footpath_only, footpath_only.road_color)
+		or _mesh_contains_color(footpath_only, footpath_only.kerb_color)
+	):
+		m_failures.append("Footpath-only street retained road or kerb surfaces")
+	if int(footpath_only.get_last_build_stats().get("stair_segment_count", 0)) != 1:
+		m_failures.append("Steep footpath-only street did not step its centre strip")
+	if !is_equal_approx(
+		footpath_only.get_maximum_half_width(), footpath_only.road_width * 0.5
+	):
+		m_failures.append("Footpath-only street retained side-band corridor width")
+	footpath_only.queue_free()
+
+	var combined := BuildingFactoryScript.create_street_node(
+		self,
+		PackedVector3Array([Vector3.ZERO, Vector3(6.0, 0.0, 0.0)]),
+		{"cross_section_mode": Street3DScript.CrossSectionMode.ROAD_AND_FOOTPATH}
+	) as Street3DScript
+	add_child(combined)
+	for color: Color in [combined.road_color, combined.kerb_color, combined.footpath_color]:
+		if !_mesh_contains_color(combined, color):
+			m_failures.append("Combined street omitted one of its surface bands")
+	if combined.get_maximum_half_width() <= combined.road_width * 0.5:
+		m_failures.append("Combined street omitted its side-band corridor width")
+	combined.queue_free()
 
 
 func _validate_strict_stair_threshold() -> void:
@@ -535,6 +594,17 @@ func _colors_near(first: Color, second: Color, tolerance := 0.01) -> bool:
 	)
 
 
+func _mesh_contains_color(street: Street3DScript, target: Color) -> bool:
+	if street == null or street.mesh == null or street.mesh.get_surface_count() <= 0:
+		return false
+	var arrays: Array = street.mesh.surface_get_arrays(0)
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	for color: Color in colors:
+		if _colors_near(color, target):
+			return true
+	return false
+
+
 func _make_street(end_point: Vector3) -> Street3DScript:
 	var street := BuildingFactoryScript.create_street_node(
 		self,
@@ -565,11 +635,47 @@ func _validate_street_json_generation() -> void:
 	var resolved: Dictionary = compile_result.get("resolved", {})
 	if String(resolved.get("type", "")) != "street":
 		m_failures.append("Street generator report omitted the street type")
+	if String(resolved.get("cross_section_mode", "")) != "road_and_footpath":
+		m_failures.append("Street generator report omitted the default cross-section mode")
 	if int(resolved.get("stair_segment_count", 0)) != 1:
 		m_failures.append("Street generator did not resolve the expected stair segment")
 	if building.get_child_count() != 1 or !(building.get_child(0) is Street3DScript):
 		m_failures.append("Street generator did not author exactly one Street3D block")
+	elif int(building.get_child(0).cross_section_mode) != Street3DScript.CrossSectionMode.ROAD_AND_FOOTPATH:
+		m_failures.append("Street generator did not preserve its default road-and-footpath mode")
 	building.free()
+
+	var footpath_spec := StreetSpecScript.new()
+	var footpath_errors: Array[String] = footpath_spec.apply_dictionary({
+		"type": "street",
+		"schema_version": 1,
+		"generator_version": 1,
+		"name": "FootpathOnly",
+		"path": [[0.0, 0.0, 0.0], [4.0, 2.0, 0.0]],
+		"cross_section_mode": "footpath_only",
+	})
+	if !footpath_errors.is_empty():
+		m_failures.append("Footpath-only street spec failed to load: %s" % [footpath_errors])
+		return
+	var footpath_result := BuildingSpecCompilerScript.compile(footpath_spec)
+	var footpath_building = footpath_result.get("building")
+	var footpath_compile_errors: Array = footpath_result.get("errors", [])
+	if !footpath_compile_errors.is_empty() or footpath_building == null:
+		m_failures.append(
+			"Footpath-only street spec failed to compile: %s" % [footpath_compile_errors]
+		)
+		return
+	var footpath_resolved: Dictionary = footpath_result.get("resolved", {})
+	if String(footpath_resolved.get("cross_section_mode", "")) != "footpath_only":
+		m_failures.append("Footpath-only generator report lost the selected mode")
+	if (
+		footpath_building.get_child_count() != 1
+		or !(footpath_building.get_child(0) is Street3DScript)
+		or int(footpath_building.get_child(0).cross_section_mode)
+		!= Street3DScript.CrossSectionMode.FOOTPATH_ONLY
+	):
+		m_failures.append("Footpath-only generator did not preserve the selected mode")
+	footpath_building.free()
 
 
 func _validate_wireframe_and_native_transform() -> void:
