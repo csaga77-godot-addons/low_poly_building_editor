@@ -24,10 +24,9 @@ const PREVIEW_META := &"building_editor_preview"
 const MESH_GEOMETRY_VERSION := 26
 const RAIL_SIDE_LEFT := 0
 const RAIL_SIDE_RIGHT := 1
-const SIDE_WALL_COLLISION_THICKNESS := 0.64
-const SIDE_WALL_COLLISION_META := &"stairs_side_wall_collision"
-const LEFT_SIDE_COLLISION_SHAPE_NAME := "LeftSideCollisionShape3D"
-const RIGHT_SIDE_COLLISION_SHAPE_NAME := "RightSideCollisionShape3D"
+const SLOPE_COLLISION_SHAPE_NAME := "SlopeCollisionShape3D"
+const RAIL_COLLISION_SHAPE_NAME := "RailCollisionShape3D"
+const COLLISION_MINIMUM_THICKNESS := 0.02
 
 @export var start_point := Vector3.ZERO:
 	set(value):
@@ -404,7 +403,7 @@ func rebuild_stairs_mesh(rebuild_collision: bool = true) -> void:
 	_record_generated_mesh_cache(_stairs_mesh_source_signature())
 
 	if rebuild_collision and generate_collision:
-		_add_collision_body(vertices, indices)
+		_add_collision_body()
 
 
 func _request_rebuild() -> void:
@@ -450,7 +449,7 @@ func _stairs_mesh_source_signature() -> int:
 func _rebuild_collision_from_cached_mesh() -> void:
 	_clear_generated_children()
 	if generate_collision:
-		_add_collision_body(_cached_mesh_vertices(), _cached_mesh_indices())
+		_add_collision_body()
 
 
 func _sync_transform_from_points() -> void:
@@ -903,7 +902,106 @@ func _build_stairs_material(color: Color) -> StandardMaterial3D:
 	return material
 
 
-func _add_collision_body(vertices: PackedVector3Array, indices: PackedInt32Array) -> void:
+func _add_collision_body() -> void:
+	var body := StaticBody3D.new()
+	body.name = "StairsCollision"
+	body.set_meta(GENERATED_META, true)
+	_add_stair_collision_shapes(body)
+	if body.get_child_count() == 0:
+		body.free()
+		return
+	add_child(body)
+	if Engine.is_editor_hint():
+		body.owner = null
+		for child in body.get_children():
+			child.owner = null
+
+
+func _add_stair_collision_shapes(_body: StaticBody3D) -> void:
+	# Concrete layouts own their walkable slope and optional rail collision.
+	pass
+
+
+func _add_flight_slope_collision_shape(
+	body: StaticBody3D,
+	shape_name: String,
+	seg: Dictionary
+) -> void:
+	var width: float = seg["width"]
+	var run: float = seg["run"]
+	var steps: int = seg["steps"]
+	var rise: float = seg["rise"]
+	if width <= 0.001 or run <= 0.001 or steps <= 0:
+		return
+	var top_start := 0.0
+	var top_end := rise * float(steps)
+	var bottom_start := minf(_segment_bottom(seg), -COLLISION_MINIMUM_THICKNESS)
+	var bottom_end := bottom_start
+	if tread_style == TreadStyle.OPEN:
+		var slab := _tread_slab_thickness()
+		bottom_start = top_start - slab
+		bottom_end = top_end - slab
+	var points := PackedVector3Array([
+		_segment_point(seg, Vector3(0.0, top_start, 0.0)),
+		_segment_point(seg, Vector3(width, top_start, 0.0)),
+		_segment_point(seg, Vector3(0.0, top_end, run)),
+		_segment_point(seg, Vector3(width, top_end, run)),
+		_segment_point(seg, Vector3(0.0, bottom_start, 0.0)),
+		_segment_point(seg, Vector3(width, bottom_start, 0.0)),
+		_segment_point(seg, Vector3(0.0, bottom_end, run)),
+		_segment_point(seg, Vector3(width, bottom_end, run)),
+	])
+	_add_slope_collision_shape(body, shape_name, points)
+
+
+func _slope_surface_height(
+	path_position: float,
+	path_length: float,
+	steps: int,
+	rise: float
+) -> float:
+	if path_length <= 0.001 or steps <= 0:
+		return 0.0
+	var progress := clampf(path_position / path_length, 0.0, 1.0)
+	return progress * rise * float(steps)
+
+
+func _add_slope_collision_shape(
+	body: StaticBody3D,
+	shape_name: String,
+	points: PackedVector3Array
+) -> void:
+	if points.size() < 4:
+		return
+	var collision_shape := CollisionShape3D.new()
+	collision_shape.name = shape_name
+	var slope := ConvexPolygonShape3D.new()
+	slope.points = points
+	collision_shape.shape = slope
+	body.add_child(collision_shape)
+
+
+func _add_box_collision_shape(
+	body: StaticBody3D,
+	shape_name: String,
+	shape_position: Vector3,
+	shape_size: Vector3,
+	shape_basis := Basis.IDENTITY
+) -> void:
+	var collision_shape := CollisionShape3D.new()
+	collision_shape.name = shape_name
+	var box := BoxShape3D.new()
+	box.size = shape_size
+	collision_shape.shape = box
+	collision_shape.transform = Transform3D(shape_basis, shape_position)
+	body.add_child(collision_shape)
+
+
+func _add_rail_collision_shape(
+	body: StaticBody3D,
+	vertices: PackedVector3Array,
+	indices: PackedInt32Array
+) -> void:
 	var faces := PackedVector3Array()
 	for index in range(0, indices.size(), 3):
 		faces.append(vertices[indices[index]])
@@ -916,43 +1014,9 @@ func _add_collision_body(vertices: PackedVector3Array, indices: PackedInt32Array
 	shape.set_faces(faces)
 
 	var collision_shape := CollisionShape3D.new()
-	collision_shape.name = "CollisionShape3D"
+	collision_shape.name = RAIL_COLLISION_SHAPE_NAME
 	collision_shape.shape = shape
-
-	var body := StaticBody3D.new()
-	body.name = "StairsCollision"
-	body.set_meta(GENERATED_META, true)
 	body.add_child(collision_shape)
-	_add_side_wall_collision_shapes(body)
-	add_child(body)
-	if Engine.is_editor_hint():
-		body.owner = null
-		collision_shape.owner = null
-		for child in body.get_children():
-			if child != collision_shape:
-				child.owner = null
-
-
-func _add_side_wall_collision_shapes(body: StaticBody3D) -> void:
-	# Concrete layouts own the placement of their side blockers.
-	pass
-
-
-func _add_side_wall_collision_shape(
-	body: StaticBody3D,
-	shape_name: String,
-	shape_position: Vector3,
-	shape_size: Vector3,
-	shape_basis := Basis.IDENTITY
-) -> void:
-	var side_shape := CollisionShape3D.new()
-	side_shape.name = shape_name
-	side_shape.set_meta(SIDE_WALL_COLLISION_META, true)
-	var box := BoxShape3D.new()
-	box.size = shape_size
-	side_shape.shape = box
-	side_shape.transform = Transform3D(shape_basis, shape_position)
-	body.add_child(side_shape)
 
 
 func _clear_generated_children() -> void:

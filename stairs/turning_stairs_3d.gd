@@ -542,40 +542,39 @@ func _total_rising_step_count() -> int:
 	return int(_build_layout_plan(size.x, size.y)["total_steps"])
 
 
-func _add_side_wall_collision_shapes(body: StaticBody3D) -> void:
+func _add_stair_collision_shapes(body: StaticBody3D) -> void:
 	var size := get_stair_size()
 	if size.x <= 0.001 or size.y <= 0.001:
 		return
-	_add_layout_side_wall_collision_shapes(body, size.x, size.y)
-
-
-func _add_layout_side_wall_collision_shapes(
-	body: StaticBody3D,
-	width: float,
-	depth: float
-) -> void:
-	var plan := _build_layout_plan(width, depth)
-	var fw: float = plan["flight_width"]
-	var wall_thickness := minf(SIDE_WALL_COLLISION_THICKNESS, fw * 0.45)
+	var plan := _build_layout_plan(size.x, size.y)
 	var shape_index := 0
 	for seg: Dictionary in plan["segments"]:
 		match int(seg["kind"]):
 			SegmentKind.SEGMENT_FLIGHT:
-				shape_index = _add_flight_collision_boxes(
-					body, seg, wall_thickness, shape_index
+				_add_flight_slope_collision_shape(
+					body, _layout_collision_shape_name(shape_index), seg
 				)
+				shape_index += 1
 			SegmentKind.SEGMENT_LANDING:
 				shape_index = _add_landing_collision_box(body, seg, shape_index)
 			_:
-				shape_index = _add_layout_specific_collision_boxes(
-					body, seg, wall_thickness, shape_index
+				shape_index = _add_layout_specific_slope_collision_shapes(
+					body, seg, shape_index
 				)
 
+	var rail_vertices := PackedVector3Array()
+	var rail_normals := PackedVector3Array()
+	var rail_colors := PackedColorArray()
+	var rail_indices := PackedInt32Array()
+	_append_layout_rail_geometry(
+		plan, rail_vertices, rail_normals, rail_colors, rail_indices
+	)
+	_add_rail_collision_shape(body, rail_vertices, rail_indices)
 
-func _add_layout_specific_collision_boxes(
+
+func _add_layout_specific_slope_collision_shapes(
 	_body: StaticBody3D,
 	_seg: Dictionary,
-	_wall_thickness: float,
 	shape_index: int
 ) -> int:
 	return shape_index
@@ -583,50 +582,8 @@ func _add_layout_specific_collision_boxes(
 
 func _layout_collision_shape_name(shape_index: int) -> String:
 	if shape_index == 0:
-		return "LayoutSideCollisionShape3D"
-	return "LayoutSideCollisionShape3D_%d" % (shape_index + 1)
-
-
-func _add_flight_collision_boxes(
-	body: StaticBody3D,
-	seg: Dictionary,
-	wall_thickness: float,
-	shape_index: int
-) -> int:
-	var steps: int = seg["steps"]
-	var rise: float = seg["rise"]
-	var width: float = seg["width"]
-	var run: float = seg["run"]
-	if width <= 0.001 or run <= 0.001:
-		return shape_index
-	var bottom := _segment_bottom(seg)
-	var tread_depth := run / float(steps)
-	var thickness := minf(wall_thickness, width * 0.45)
-	var seg_basis := Basis(
-		Vector3(seg["width_axis"]), Vector3.UP, Vector3(seg["run_axis"])
-	)
-	for step_index in range(steps):
-		var z_center := tread_depth * (float(step_index) + 0.5)
-		var top := rise * float(step_index + 1)
-		var box_height := top - bottom
-		var y_center := bottom + box_height * 0.5
-		_add_side_wall_collision_shape(
-			body,
-			_layout_collision_shape_name(shape_index),
-			_segment_point(seg, Vector3(thickness * 0.5, y_center, z_center)),
-			Vector3(thickness, box_height, tread_depth),
-			seg_basis
-		)
-		shape_index += 1
-		_add_side_wall_collision_shape(
-			body,
-			_layout_collision_shape_name(shape_index),
-			_segment_point(seg, Vector3(width - thickness * 0.5, y_center, z_center)),
-			Vector3(thickness, box_height, tread_depth),
-			seg_basis
-		)
-		shape_index += 1
-	return shape_index
+		return SLOPE_COLLISION_SHAPE_NAME
+	return "%s_%d" % [SLOPE_COLLISION_SHAPE_NAME, shape_index + 1]
 
 
 func _add_landing_collision_box(
@@ -639,16 +596,14 @@ func _add_landing_collision_box(
 	if width <= 0.001 or run <= 0.001:
 		return shape_index
 	var bottom := _landing_bottom(seg)
-	var box_height := -bottom
-	if box_height <= 0.001:
-		return shape_index
+	var box_height := maxf(-bottom, COLLISION_MINIMUM_THICKNESS)
 	var seg_basis := Basis(
 		Vector3(seg["width_axis"]), Vector3.UP, Vector3(seg["run_axis"])
 	)
-	_add_side_wall_collision_shape(
+	_add_box_collision_shape(
 		body,
 		_layout_collision_shape_name(shape_index),
-		_segment_point(seg, Vector3(width * 0.5, bottom * 0.5, run * 0.5)),
+		_segment_point(seg, Vector3(width * 0.5, -box_height * 0.5, run * 0.5)),
 		Vector3(width, box_height, run),
 		seg_basis
 	)

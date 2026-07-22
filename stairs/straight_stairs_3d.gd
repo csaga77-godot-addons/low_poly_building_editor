@@ -257,40 +257,28 @@ func _append_side_strips(
 		)
 
 
-func _add_side_wall_collision_shapes(body: StaticBody3D) -> void:
+func _add_stair_collision_shapes(body: StaticBody3D) -> void:
 	var size := get_stair_size()
 	if size.x <= 0.001 or size.y <= 0.001:
 		return
-	var bottom_y := -maxf(stair_thickness, 0.0)
-	var side_wall_thickness := minf(SIDE_WALL_COLLISION_THICKNESS, size.x * 0.45)
 	var steps := _effective_step_count()
-	var tread_depth := size.y / float(steps)
 	var rise := maxf(stair_height, 0.05) / float(steps)
-	for step_index in range(steps):
-		var z0 := tread_depth * float(step_index)
-		var z1 := tread_depth * float(step_index + 1)
-		var top_y := rise * float(step_index + 1)
-		var collision_height := top_y - bottom_y
-		var collision_center_y := bottom_y + collision_height * 0.5
-		var collision_center_z := (z0 + z1) * 0.5
-		var shape_suffix := "" if step_index == 0 else "_%d" % (step_index + 1)
-		_add_side_wall_collision_shape(
-			body,
-			LEFT_SIDE_COLLISION_SHAPE_NAME + shape_suffix,
-			Vector3(
-				side_wall_thickness * 0.5,
-				collision_center_y,
-				collision_center_z
-			),
-			Vector3(side_wall_thickness, collision_height, tread_depth)
-		)
-		_add_side_wall_collision_shape(
-			body,
-			RIGHT_SIDE_COLLISION_SHAPE_NAME + shape_suffix,
-			Vector3(
-				size.x - side_wall_thickness * 0.5,
-				collision_center_y,
-				collision_center_z
-			),
-			Vector3(side_wall_thickness, collision_height, tread_depth)
-		)
+	var segment := _make_flight_segment(
+		Vector3.ZERO, Vector3.BACK, size.x, size.y, steps, rise
+	)
+	_add_flight_slope_collision_shape(body, SLOPE_COLLISION_SHAPE_NAME, segment)
+
+	var rail_vertices := PackedVector3Array()
+	var rail_normals := PackedVector3Array()
+	var rail_colors := PackedColorArray()
+	var rail_indices := PackedInt32Array()
+	_append_rail_geometry(
+		size.x,
+		size.y,
+		maxf(stair_height, 0.05),
+		rail_vertices,
+		rail_normals,
+		rail_colors,
+		rail_indices
+	)
+	_add_rail_collision_shape(body, rail_vertices, rail_indices)

@@ -134,14 +134,13 @@ func _append_layout_specific_rail_geometry(
 		)
 
 
-func _add_layout_specific_collision_boxes(
+func _add_layout_specific_slope_collision_shapes(
 	body: StaticBody3D,
 	seg: Dictionary,
-	wall_thickness: float,
 	shape_index: int
 ) -> int:
-	return _add_radial_wedge_collision_boxes(
-		body, seg, wall_thickness, shape_index
+	return _add_radial_wedge_slope_collision_shapes(
+		body, seg, shape_index
 	)
 
 
@@ -194,16 +193,16 @@ func _validate_property(property: Dictionary) -> void:
 		property["usage"] = int(property.get("usage", 0)) & ~PROPERTY_USAGE_EDITOR
 
 
-func _add_radial_wedge_collision_boxes(
+func _add_radial_wedge_slope_collision_shapes(
 	body: StaticBody3D,
 	seg: Dictionary,
-	wall_thickness: float,
 	shape_index: int
 ) -> int:
 	var steps: int = seg["steps"]
 	var rise: float = seg["rise"]
 	var center: Vector2 = seg["center"]
 	var outer_radius: float = seg["outer_radius"]
+	var inner_radius: float = seg["inner_radius"]
 	var turn_radians: float = seg["turn_radians"]
 	var turn_sign: float = seg["turn_sign"]
 	if steps <= 0:
@@ -212,38 +211,49 @@ func _add_radial_wedge_collision_boxes(
 	for tread_index in range(steps):
 		var theta0 := turn_radians * float(tread_index) / float(steps)
 		var theta1 := turn_radians * float(tread_index + 1) / float(steps)
+		var inner0 := center + _radial_direction(theta0, turn_sign) * inner_radius
+		var inner1 := center + _radial_direction(theta1, turn_sign) * inner_radius
 		var outer0 := center + _radial_direction(theta0, turn_sign) * outer_radius
 		var outer1 := center + _radial_direction(theta1, turn_sign) * outer_radius
-		var chord := outer1 - outer0
-		var chord_length := chord.length()
-		if chord_length <= 0.01:
-			continue
-		var chord_dir := chord / chord_length
-		var inward := ((center - (outer0 + outer1) * 0.5)).normalized()
-		var top := rise * float(tread_index + 1)
-		var box_bottom := top - slab
-		if tread_style != TreadStyle.OPEN:
-			# Match the closed spiral wedge, which drops to the previous
-			# tread's top minus the slab.
-			box_bottom = rise * float(tread_index) - slab
-		var box_height := top - box_bottom
-		var center_2d := (outer0 + outer1) * 0.5 + inward * (wall_thickness * 0.5)
-		var chord_dir_3d := _segment_direction(
-			seg, Vector3(chord_dir.x, 0.0, chord_dir.y)
-		).normalized()
-		var box_basis := Basis(
-			chord_dir_3d, Vector3.UP, chord_dir_3d.cross(Vector3.UP)
+		var top0 := _slope_surface_height(
+			theta0, turn_radians, steps, rise
 		)
-		_add_side_wall_collision_shape(
-			body,
-			_layout_collision_shape_name(shape_index),
-			_segment_point(seg, Vector3(
-				center_2d.x, (top + box_bottom) * 0.5, center_2d.y
-			)),
-			Vector3(chord_length, box_height, wall_thickness),
-			box_basis
+		var top1 := _slope_surface_height(
+			theta1, turn_radians, steps, rise
+		)
+		var bottom0 := top0 - slab
+		var bottom1 := top1 - slab
+		var points := PackedVector3Array([
+			_segment_point(seg, Vector3(inner0.x, top0, inner0.y)),
+			_segment_point(seg, Vector3(outer0.x, top0, outer0.y)),
+			_segment_point(seg, Vector3(inner1.x, top1, inner1.y)),
+			_segment_point(seg, Vector3(outer1.x, top1, outer1.y)),
+			_segment_point(seg, Vector3(inner0.x, bottom0, inner0.y)),
+			_segment_point(seg, Vector3(outer0.x, bottom0, outer0.y)),
+			_segment_point(seg, Vector3(inner1.x, bottom1, inner1.y)),
+			_segment_point(seg, Vector3(outer1.x, bottom1, outer1.y)),
+		])
+		_add_slope_collision_shape(
+			body, _layout_collision_shape_name(shape_index), points
 		)
 		shape_index += 1
+
+	var column_radius := inner_radius / cos(
+		PI / float(SpiralGeometry.SPIRAL_COLUMN_SIDES)
+	)
+	var column_bottom := -maxf(stair_thickness, 0.0)
+	var column_top := maxf(stair_height, 0.05)
+	var column_points := PackedVector3Array()
+	for side_index in range(SpiralGeometry.SPIRAL_COLUMN_SIDES):
+		var angle := TAU * float(side_index) / float(SpiralGeometry.SPIRAL_COLUMN_SIDES)
+		var point := center + Vector2(cos(angle), sin(angle)) * column_radius
+		column_points.append(
+			_segment_point(seg, Vector3(point.x, column_bottom, point.y))
+		)
+		column_points.append(
+			_segment_point(seg, Vector3(point.x, column_top, point.y))
+		)
+	_add_slope_collision_shape(body, "ColumnCollisionShape3D", column_points)
 	return shape_index
 
 

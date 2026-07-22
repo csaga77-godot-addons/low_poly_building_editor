@@ -14,7 +14,7 @@ the internal `TurningStairs3D` layer owns Turn and Flight Width plus shared turn
 allocation, mirroring, transition-rail, and collision orchestration; Winder owns its
 90/180-degree selector, and Spiral owns its configurable 45–1080-degree
 radial run around a low-poly central column. Straight owns its complete single-run
-mesh, rail, and side-blocker path, while each concrete non-straight class builds
+mesh, rail, and slope-collision path, while each concrete non-straight class builds
 its own segment and rail plan; landings, winder fans, and spiral
 treads subdivide the same rectangle, and optional rails follow the turning path.
 The dock passes the selected concrete stair script directly to the factory rather

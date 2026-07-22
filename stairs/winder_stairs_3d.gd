@@ -62,14 +62,13 @@ func _append_layout_specific_segment_geometry(
 	)
 
 
-func _add_layout_specific_collision_boxes(
+func _add_layout_specific_slope_collision_shapes(
 	body: StaticBody3D,
 	seg: Dictionary,
-	wall_thickness: float,
 	shape_index: int
 ) -> int:
-	return _add_radial_fan_collision_boxes(
-		body, seg, wall_thickness, shape_index
+	return _add_radial_fan_slope_collision_shapes(
+		body, seg, shape_index
 	)
 
 
@@ -302,70 +301,72 @@ func _layout_mesh_source_signature_values() -> Array:
 	return values
 
 
-func _add_radial_fan_collision_boxes(
+func _add_radial_fan_slope_collision_shapes(
 	body: StaticBody3D,
 	seg: Dictionary,
-	wall_thickness: float,
 	shape_index: int
 ) -> int:
 	var steps: int = seg["steps"]
 	var rise: float = seg["rise"]
 	var pivot: Vector2 = seg["pivot"]
 	var perimeter: PackedVector2Array = seg["perimeter"]
-	var bottom := _segment_bottom(seg)
 	var cumulative := WinderFanGeometry.radial_fan_perimeter_cumulative(perimeter)
 	var total_length := cumulative[cumulative.size() - 1]
 	if total_length <= 0.001:
 		return shape_index
-	var walls: Array[Dictionary] = []
+	var slab := _tread_slab_thickness()
 	for tread_index in range(steps):
 		var t0 := total_length * float(tread_index) / float(steps)
 		var t1 := total_length * float(tread_index + 1) / float(steps)
-		var tread_top := rise * float(tread_index + 1)
-		var edge_points: Array[Vector2] = [
-			WinderFanGeometry.radial_fan_point_at(perimeter, cumulative, t0),
-		]
+		var edge_samples: Array[Dictionary] = [{
+			"distance": t0,
+			"point": WinderFanGeometry.radial_fan_point_at(
+				perimeter, cumulative, t0
+			),
+		}]
 		for corner_index in range(1, perimeter.size() - 1):
 			var corner_distance := cumulative[corner_index]
 			if corner_distance > t0 + 0.0001 and corner_distance < t1 - 0.0001:
-				edge_points.append(perimeter[corner_index])
-		edge_points.append(WinderFanGeometry.radial_fan_point_at(perimeter, cumulative, t1))
-		for edge_index in range(edge_points.size() - 1):
-			walls.append({
-				"a": edge_points[edge_index],
-				"b": edge_points[edge_index + 1],
-				"top": tread_top,
-			})
-	for wall: Dictionary in seg["extra_walls"]:
-		walls.append(wall)
-	for wall in walls:
-		var a: Vector2 = wall["a"]
-		var b: Vector2 = wall["b"]
-		var edge_length := a.distance_to(b)
-		if edge_length <= 0.01:
-			continue
-		var wall_top: float = wall["top"]
-		var box_height := wall_top - bottom
-		if box_height <= 0.001:
-			continue
-		var edge_dir := (b - a).normalized()
-		var inward := Vector2(-edge_dir.y, edge_dir.x)
-		var edge_mid := (a + b) * 0.5
-		if inward.dot(pivot - edge_mid) < 0.0:
-			inward = -inward
-		var center_2d := edge_mid + inward * (wall_thickness * 0.5)
-		var edge_dir_3d := _segment_direction(
-			seg, Vector3(edge_dir.x, 0.0, edge_dir.y)
-		).normalized()
-		var box_basis := Basis(edge_dir_3d, Vector3.UP, edge_dir_3d.cross(Vector3.UP))
-		_add_side_wall_collision_shape(
-			body,
-			_layout_collision_shape_name(shape_index),
-			_segment_point(seg, Vector3(
-				center_2d.x, bottom + box_height * 0.5, center_2d.y
-			)),
-			Vector3(edge_length, box_height, wall_thickness),
-			box_basis
-		)
-		shape_index += 1
+				edge_samples.append({
+					"distance": corner_distance,
+					"point": perimeter[corner_index],
+				})
+		edge_samples.append({
+			"distance": t1,
+			"point": WinderFanGeometry.radial_fan_point_at(
+				perimeter, cumulative, t1
+			),
+		})
+		for edge_index in range(edge_samples.size() - 1):
+			var start_sample: Dictionary = edge_samples[edge_index]
+			var end_sample: Dictionary = edge_samples[edge_index + 1]
+			var q0: Vector2 = start_sample["point"]
+			var q1: Vector2 = end_sample["point"]
+			if q0.distance_to(q1) <= 0.0001:
+				continue
+			var top0 := _slope_surface_height(
+				float(start_sample["distance"]), total_length, steps, rise
+			)
+			var top1 := _slope_surface_height(
+				float(end_sample["distance"]), total_length, steps, rise
+			)
+			var bottom0 := minf(_segment_bottom(seg), -COLLISION_MINIMUM_THICKNESS)
+			var bottom1 := bottom0
+			if tread_style == TreadStyle.OPEN:
+				bottom0 = top0 - slab
+				bottom1 = top1 - slab
+			var points := PackedVector3Array([
+				_segment_point(seg, Vector3(pivot.x, top0, pivot.y)),
+				_segment_point(seg, Vector3(q0.x, top0, q0.y)),
+				_segment_point(seg, Vector3(pivot.x, top1, pivot.y)),
+				_segment_point(seg, Vector3(q1.x, top1, q1.y)),
+				_segment_point(seg, Vector3(pivot.x, bottom0, pivot.y)),
+				_segment_point(seg, Vector3(q0.x, bottom0, q0.y)),
+				_segment_point(seg, Vector3(pivot.x, bottom1, pivot.y)),
+				_segment_point(seg, Vector3(q1.x, bottom1, q1.y)),
+			])
+			_add_slope_collision_shape(
+				body, _layout_collision_shape_name(shape_index), points
+			)
+			shape_index += 1
 	return shape_index
